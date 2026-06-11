@@ -38,7 +38,7 @@ Requires [Zig 0.13.0](https://ziglang.org/download/).
 zig build
 ```
 
-The binary is placed at `zig-out/bin/integritygap`.
+
 
 ## Usage
 
