@@ -18,7 +18,7 @@ The compiled binary is at `zig-out/bin/integritygap`.
 
 ```bash
 zig build test              # embedded test blocks in each source file
-cd tests && bash run_tests.sh   # ~700 shell-based tests
+cd tests && bash run_tests.sh   
 ```
 
 ## Source Organization
