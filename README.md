@@ -18,7 +18,7 @@ The compiled binary is at `zig-out/bin/integritygap`.
 
 ```bash
 zig build test              # embedded test blocks in each source file
-cd tests && bash run_tests.sh   
+cd tests && bash run_tests.sh   # ~700 shell-based tests
 ```
 
 ## Source Organization
@@ -141,26 +141,53 @@ The pipeline executes in this order:
 
 ## Scoring System
 
-### Core 6 Dimensions (analyzer.zig)
+The system produces scoring dimensions at two levels: per-function category scores (10 dimensions from CategoryScores aggregated into a single function gap) and engine-level scores (from each specialized analyzer).
 
-Each function receives a score from 0 to 100 per dimension:
+### Per-Function Category Scores (CategoryScores in types.zig:323)
 
-| Dimension | Weight in aggregate | What it measures |
+Every function receives a score from 0 to 100 per category. All 10 categories contribute to the function's aggregate gap via fixed weights:
+
+| Category | Weight | What it measures |
 |---|---|---|
 | error_handling | 15% | Fraction of critical calls without return-value validation |
 | resource_lifecycle | 12% | Fraction of resource acquires without matching release |
-| input_validation | 10% | Pointer dereference before validation, memcpy without bounds check |
 | cryptographic | 13% | Missing init/finalize/destroy, hardcoded IV, unchecked crypto calls |
-| logging_auditability | 8% | High-risk operations without corresponding logging |
+| input_validation | 10% | Pointer dereference before validation, memcpy without bounds check |
 | cleanup | 10% | Exit paths with unreleased resources |
+| concurrency | 10% | Unsynchronized shared access, lock violations, deadlock patterns |
+| memory_safety | 10% | Unbounded copies, format strings, use-after-free, buffer overflows |
+| logging_auditability | 8% | High-risk operations without corresponding logging |
+| configuration | 6% | Hardcoded credentials, insecure defaults, disabled security |
+| supply_chain | 6% | Known CVEs in linked dependencies, unsigned libraries, license risk |
 
-The aggregate score per function is the weighted sum of all 6 dimensions.
+The aggregate gap per function is: `clamp100(Σ(category_score × weight))`.
 
 ### Local Normalization
 
 If 4+ functions exist, scores are normalized against the local population:
 - Functions near the average are penalized (35% retention)
 - Functions significantly above average retain 28% of raw score plus up to 22 per z-score unit
+
+### Engine-Level Scores
+
+Each specialized analysis engine outputs its own score (0–100 or 0–100%), independent of the per-function categories:
+
+| Engine | Score field | Range | Meaning |
+|---|---|---|---|
+| concurrency_analyzer | concurrency_gap_score | 0–100 | Severity of data races, lock violations, unguarded shared data |
+| concurrency_analyzer | deadlock_potential | 0–100% | Likelihood of circular wait conditions from lock ordering |
+| taint_analyzer | taint_gap_score | 0–100 | Severity of unvalidated taint propagation paths |
+| crypto_auditor | crypto_gap_score | 0–100 | Weak ciphers, hardcoded keys, static IVs, missing auth |
+| firmware_integrity | integrity_score | 0–100 | Hash mismatches, missing signatures, rollback risk |
+| memory_safety | safety_gap_score | 0–100 | Buffer overflows, use-after-free, format string, integer errors |
+| privacy_analyzer | privacy_gap_score | 0–100 | PII collection without consent, third-party sharing |
+| privacy_analyzer | gdpr_compliance_score | 0–100% | GDPR technical control coverage |
+| privacy_analyzer | ccpa_compliance_score | 0–100% | CCPA technical control coverage |
+| privacy_analyzer | hipaa_compliance_score | 0–100% | HIPAA technical safeguard coverage |
+| compliance_engine | overall_score | 0–100% | Average pass rate across all checked frameworks |
+| compliance_engine | pci_dss/hipaa/soc2/iso_27001 score | 0–100% | Per-framework requirement pass rate (ComplianceReport.score) |
+| dependency_checker | supply_chain_score | 0–100% | CVE-free dependency ratio, signature validity |
+| config_auditor | config_security_score | 0–100% | Security control implementation rate across 12 controls |
 
 ### Threat Classification
 
@@ -308,7 +335,8 @@ Loads shared libraries (.so, .dylib, .dll) via `std.DynLib`. 8 hook points: pre/
 ## Differences from v1.0.0
 
 **Preserved:**
-- 6-dimension scoring methodology (error handling, resource lifecycle, input validation, cryptographic, logging auditability, cleanup)
+- 10-dimension per-function scoring methodology (6 original + 4 new: concurrency, memory_safety, configuration, supply_chain)
+- 9 engine-level scores (taint, crypto, firmware, memory, privacy ×4, compliance, dependency, config)
 - Threat classification decision tree (with adjusted thresholds)
 - Call categorization and return-value checking
 - CFG-based cleanup path analysis
