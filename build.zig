@@ -19,4 +19,14 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run IntegrityGap");
     run_step.dependOn(&run_cmd.step);
+
+    const test_exe = b.addTest(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const test_run = b.addRunArtifact(test_exe);
+    const test_step = b.step("test", "Run IntegrityGap tests");
+    test_step.dependOn(&test_run.step);
 }
