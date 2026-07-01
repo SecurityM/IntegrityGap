@@ -91,4 +91,4 @@ JSON output contains per-function profiles with:
 
 ## License
 
-CC BY-NC-ND 4.0 — see [LICENSE](LICENSE).
+Apache 2.0 — see [LICENSE](LICENSE).
