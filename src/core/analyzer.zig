@@ -326,7 +326,7 @@ fn detectAntiDebuggingPatterns(instrs: []const Decoded, image: BinaryImage, evid
     }
 }
 
-fn detectResourceLeakPatterns(instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan, evidence: *std.ArrayList(Evidence), allocator: Allocator) !void {
+fn detectResourceLeakPatterns(instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan, evidence: *std.ArrayList(Evidence), _: Allocator) !void {
     for (functions) |function| {
         const func_instrs = instrs[function.instr_start..function.instr_end];
         var handles_opened: usize = 0;
@@ -343,7 +343,7 @@ fn detectResourceLeakPatterns(instrs: []const Decoded, image: BinaryImage, funct
                 .function_va = function.start,
                 .address = function.start,
                 .category = "resource_leak",
-                .message = try std.fmt.allocPrint(allocator, "Potential resource leak: {} opens vs {} closes in function", .{ handles_opened, handles_closed }),
+                .message = "Potential resource leak: unbalanced open/close in function",
                 .severity = 65,
             });
         }
@@ -375,23 +375,7 @@ fn detectApiMisusage(instrs: []const Decoded, image: BinaryImage, functions: []c
     }
 }
 
-fn detectExportObfuscation(bytes: []const u8, image: BinaryImage, evidence: *std.ArrayList(Evidence), allocator: Allocator) !void {
-    if (image.exports_count > 0) {
-        const min_exports_for_obfuscation: usize = 100;
-        if (image.exports_count >= min_exports_for_obfuscation) {
-            const name_lengths = for (image.imports) |imp| {
-                if (imp.name.len >= 64) break true;
-            } else false;
-            if (name_lengths) {
-                try evidence.append(.{
-                    .function_va = 0, .address = 0, .category = "export_obfuscation",
-                    .message = "High export count with unusually long names - possible export obfuscation",
-                    .severity = 55,
-                });
-            }
-        }
-    }
-
+fn detectExportObfuscation(bytes: []const u8, _: BinaryImage, evidence: *std.ArrayList(Evidence), _: Allocator) !void {
     const packed_indicators = [_][]const u8{
         "UPX", "UPX!", "UPX0", "UPX1", "UPX2", "aspack", "PEtite",
         "Themida", "Enigma", "VMProtect", "Obsidium",
@@ -402,7 +386,7 @@ fn detectExportObfuscation(bytes: []const u8, image: BinaryImage, evidence: *std
                 .function_va = 0,
                 .address = 0,
                 .category = "packed_binary",
-                .message = try std.fmt.allocPrint(allocator, "Packer/obfuscator signature: {s}", .{indicator}),
+                .message = "Packer/obfuscator signature detected",
                 .severity = 60,
             });
             break;
@@ -504,6 +488,7 @@ fn applyLocalNorm(profiles: []FunctionProfile) void {
         avg.cryptographic += p.scores.cryptographic;
         avg.logging_auditability += p.scores.logging_auditability;
         avg.cleanup += p.scores.cleanup;
+        avg.concurrency += p.scores.concurrency;
     }
     const inv = 1.0 / @as(f64, @floatFromInt(profiles.len));
     avg.error_handling *= inv;
@@ -512,6 +497,7 @@ fn applyLocalNorm(profiles: []FunctionProfile) void {
     avg.cryptographic *= inv;
     avg.logging_auditability *= inv;
     avg.cleanup *= inv;
+    avg.concurrency *= inv;
     var variance = CategoryScores{};
     for (profiles) |p| {
         variance.error_handling += utils.squared(p.scores.error_handling - avg.error_handling);
@@ -520,6 +506,7 @@ fn applyLocalNorm(profiles: []FunctionProfile) void {
         variance.cryptographic += utils.squared(p.scores.cryptographic - avg.cryptographic);
         variance.logging_auditability += utils.squared(p.scores.logging_auditability - avg.logging_auditability);
         variance.cleanup += utils.squared(p.scores.cleanup - avg.cleanup);
+        variance.concurrency += utils.squared(p.scores.concurrency - avg.concurrency);
     }
     const stddev = CategoryScores{
         .error_handling = @sqrt(variance.error_handling * inv),
@@ -528,6 +515,7 @@ fn applyLocalNorm(profiles: []FunctionProfile) void {
         .cryptographic = @sqrt(variance.cryptographic * inv),
         .logging_auditability = @sqrt(variance.logging_auditability * inv),
         .cleanup = @sqrt(variance.cleanup * inv),
+        .concurrency = @sqrt(variance.concurrency * inv),
     };
     for (profiles) |*p| {
         p.scores.error_handling = normalizeAgainstLocalNorm(p.scores.error_handling, avg.error_handling, stddev.error_handling);
@@ -536,8 +524,9 @@ fn applyLocalNorm(profiles: []FunctionProfile) void {
         p.scores.cryptographic = normalizeAgainstLocalNorm(p.scores.cryptographic, avg.cryptographic, stddev.cryptographic);
         p.scores.logging_auditability = normalizeAgainstLocalNorm(p.scores.logging_auditability, avg.logging_auditability, stddev.logging_auditability);
         p.scores.cleanup = normalizeAgainstLocalNorm(p.scores.cleanup, avg.cleanup, stddev.cleanup);
+        p.scores.concurrency = normalizeAgainstLocalNorm(p.scores.concurrency, avg.concurrency, stddev.concurrency);
         p.aggregate_gap = p.scores.aggregate();
-        const local_delta = @max(0.0, p.aggregate_gap - normalizeAgainstLocalNorm(avg.aggregate(), avg.aggregate(), stddev.aggregate()));
+        const local_delta = @max(0.0, p.aggregate_gap - normalizeAgainstLocalNorm(p.aggregate_gap, avg.aggregate(), stddev.aggregate()));
         p.confidence = utils.clamp100(p.confidence + local_delta * 0.25);
     }
 }
@@ -564,6 +553,7 @@ fn buildSummary(profiles: []const FunctionProfile) Summary {
         scores.cryptographic += p.scores.cryptographic;
         scores.logging_auditability += p.scores.logging_auditability;
         scores.cleanup += p.scores.cleanup;
+        scores.concurrency += p.scores.concurrency;
         if (p.confidence > max_conf) max_conf = p.confidence;
         if (p.aggregate_gap >= 45 or p.confidence >= 65) material_profiles += 1;
     }
@@ -574,6 +564,7 @@ fn buildSummary(profiles: []const FunctionProfile) Summary {
     scores.cryptographic *= inv;
     scores.logging_auditability *= inv;
     scores.cleanup *= inv;
+    scores.concurrency *= inv;
     const aggregate = scores.aggregate();
     const material_ratio = @as(f64, @floatFromInt(material_profiles)) / @as(f64, @floatFromInt(profiles.len));
     const threat = classifyThreat(scores, aggregate, max_conf, profiles.len, material_ratio);
@@ -581,7 +572,21 @@ fn buildSummary(profiles: []const FunctionProfile) Summary {
     return .{ .threat = threat, .aggregate_gap = aggregate, .anomaly_confidence = confidence_base, .scores = scores };
 }
 
-fn classifyThreat(scores: CategoryScores, aggregate: f64, max_conf: f64, function_count: usize, material_ratio: f64) ThreatClass {
+pub fn recalculateThreat(summary: *Summary, profiles: []const FunctionProfile) void {
+    var max_conf: f64 = 0;
+    var material_profiles: usize = 0;
+    for (profiles) |p| {
+        if (p.confidence > max_conf) max_conf = p.confidence;
+        if (p.aggregate_gap >= 45 or p.confidence >= 65) material_profiles += 1;
+    }
+    const material_ratio = if (profiles.len > 0)
+        @as(f64, @floatFromInt(material_profiles)) / @as(f64, @floatFromInt(profiles.len))
+    else
+        0;
+    summary.threat = classifyThreat(summary.scores, summary.aggregate_gap, max_conf, profiles.len, material_ratio);
+}
+
+pub fn classifyThreat(scores: CategoryScores, aggregate: f64, max_conf: f64, function_count: usize, material_ratio: f64) ThreatClass {
     const size_scale = adaptiveThreatScale(function_count);
     const systemic_boost: f64 = if (material_ratio >= 0.25) 0.75 else if (material_ratio >= 0.12) 0.88 else 1.0;
     const scale = size_scale * systemic_boost;
@@ -591,6 +596,16 @@ fn classifyThreat(scores: CategoryScores, aggregate: f64, max_conf: f64, functio
     if (scores.logging_auditability > 40.0 * scale and scores.error_handling > 40.0 * scale) return .RAT;
     if (scores.resource_lifecycle > 50.0 * scale and scores.error_handling < 35.0 * scale) return .Dropper;
     if (max_conf > 70.0 * scale and aggregate < 35.0 * scale and material_ratio < 0.06) return .Implant;
+    if (scores.supply_chain > 50.0 * scale and scores.configuration > 30.0 * scale) return .Supply_Chain_Compromise;
+    if (scores.memory_safety > 45.0 * scale and scores.configuration > 35.0 * scale and scores.resource_lifecycle > 20.0 * scale) return .Firmware_Backdoor;
+    if (scores.cryptographic > 55.0 * scale and scores.input_validation > 30.0 * scale) return .Crypto_Malware;
+    if (scores.memory_safety > 50.0 * scale and scores.logging_auditability < 20.0 * scale and scores.error_handling > 30.0 * scale) return .Rootkit;
+    if (scores.configuration > 50.0 * scale and scores.memory_safety > 40.0 * scale and scores.input_validation > 25.0 * scale) return .Bootkit;
+    if (scores.logging_auditability > 35.0 * scale and scores.input_validation > 30.0 * scale and scores.cryptographic > 20.0 * scale) return .InfoStealer;
+    if (scores.input_validation > 45.0 * scale and scores.resource_lifecycle > 35.0 * scale and scores.error_handling < 30.0 * scale) return .Loader;
+    if (scores.input_validation > 40.0 * scale and scores.resource_lifecycle > 25.0 * scale) return .Downloader;
+    if (scores.logging_auditability > 30.0 * scale and scores.input_validation > 35.0 * scale and scores.cryptographic > 15.0 * scale) return .KeyLogger;
+    if (scores.concurrency > 40.0 * scale and scores.resource_lifecycle > 30.0 * scale and scores.error_handling > 20.0 * scale) return .Worm;
     if (aggregate < 10.0 and max_conf < 50.0) return .No_Material_Gap;
     return .Legitimate_Anomalous;
 }

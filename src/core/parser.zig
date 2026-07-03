@@ -219,12 +219,13 @@ fn parseElf32(allocator: Allocator, bytes: []const u8, endian: std.builtin.Endia
 
     const owned_sections = try sections.toOwnedSlice();
     std.mem.sort(Section, owned_sections, {}, sectionLess);
+    const relocs_count = relocations.items.len;
 
     return .{
         .format = .elf32, .arch = elfArch(machine), .entry_va = entry, .image_base = 0,
         .sections = owned_sections, .imports = try imports.toOwnedSlice(),
         .symbols = try symbols.toOwnedSlice(), .relocations = try relocations.toOwnedSlice(),
-        .exports_count = 0, .relocations_count = relocations.items.len,
+        .exports_count = 0, .relocations_count = relocs_count,
         .is_pie = is_pie, .has_import_table = true,
     };
 }
@@ -376,12 +377,13 @@ fn parseElf64(allocator: Allocator, bytes: []const u8, endian: std.builtin.Endia
 
     const owned_sections = try sections.toOwnedSlice();
     std.mem.sort(Section, owned_sections, {}, sectionLess);
+    const relocs_count = relocations.items.len;
 
     return .{
         .format = .elf64, .arch = elfArch(machine), .entry_va = entry, .image_base = 0,
         .sections = owned_sections, .imports = try imports.toOwnedSlice(),
         .symbols = try symbols.toOwnedSlice(), .relocations = try relocations.toOwnedSlice(),
-        .exports_count = 0, .relocations_count = relocations.items.len,
+        .exports_count = 0, .relocations_count = relocs_count,
         .is_pie = is_pie, .has_import_table = true,
     };
 }
@@ -506,6 +508,7 @@ fn parsePe(allocator: Allocator, bytes: []const u8) !BinaryImage {
     const has_rich_header = detectRichHeader(bytes, pe_off);
 
     const empty_symbols = try allocator.alloc(Symbol, 0);
+    const relocs_count = relocations.items.len;
 
     return .{
         .format = format,
@@ -517,7 +520,7 @@ fn parsePe(allocator: Allocator, bytes: []const u8) !BinaryImage {
         .symbols = empty_symbols,
         .relocations = try relocations.toOwnedSlice(),
         .exports_count = if (export_rva == 0) 0 else 1,
-        .relocations_count = relocations.items.len,
+        .relocations_count = relocs_count,
         .subsystem = 0,
         .major_linker_version = major_linker,
         .minor_linker_version = minor_linker,

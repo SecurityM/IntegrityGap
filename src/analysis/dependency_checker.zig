@@ -54,6 +54,9 @@ pub const DependencyInfo = struct {
     file_size: u64 = 0,
 
     pub fn deinit(self: *@This(), allocator: Allocator) void {
+        for (self.vulnerabilities) |*vuln| {
+            if (vuln.description.len > 0) allocator.free(vuln.description);
+        }
         allocator.free(self.vulnerabilities);
     }
 };
@@ -237,6 +240,7 @@ pub fn analyzeDependencies(allocator: Allocator, _: []const u8, image: BinaryIma
         score -= @as(f64, @floatFromInt(unsigned_deps)) * 10.0 / @as(f64, @floatFromInt(dependencies.items.len));
     }
 
+    const total_deps = dependencies.items.len;
     return .{
         .dependencies = try dependencies.toOwnedSlice(),
         .findings = try findings.toOwnedSlice(),
@@ -244,37 +248,97 @@ pub fn analyzeDependencies(allocator: Allocator, _: []const u8, image: BinaryIma
         .vulnerable_count = vulnerable,
         .outdated_count = outdated,
         .unsigned_count = unsigned_deps,
-        .total_dependencies = dependencies.items.len,
+        .total_dependencies = total_deps,
         .supply_chain_score = utils.clamp100(score),
     };
 }
 
-fn checkVulnerabilities(name: []const u8, dep: *DependencyInfo, findings: *std.ArrayList(DependencyFinding), allocator: Allocator) !void {
-    for (known_vulnerable_versions) |known| {
-        if (utils.asciiContainsIgnoreCase(name, known.name)) {
-            dep.is_vulnerable = true;
-            const vulns = try allocator.alloc(VulnerabilityInfo, 1);
-            vulns[0] = .{
-                .cve_id = known.cve,
-                .cve_score = known.score,
-                .severity = if (known.score >= 9.0) .critical else if (known.score >= 7.0) .high else if (known.score >= 4.0) .medium else .low,
-                .description = try std.fmt.allocPrint(allocator, "Known vulnerability in {s}", .{known.name}),
-                .affected_versions = known.version,
-                .fix_version = "",
-                .known_exploitation = known.score >= 8.0,
-            };
-            allocator.free(dep.vulnerabilities);
-            dep.vulnerabilities = vulns;
-
-            try findings.append(.{
-                .dependency_name = dep.name,
-                .issue_type = .known_vulnerability,
-                .severity = if (known.score >= 9.0) @as(u8, 95) else if (known.score >= 7.0) @as(u8, 80) else @as(u8, 50),
-                .cve_id = known.cve,
-                .description = try std.fmt.allocPrint(allocator, "Dependency {s} has known vulnerability {s} (CVSS: {d:.1})", .{ dep.name, known.cve, known.score }),
-                .recommendation = try std.fmt.allocPrint(allocator, "Update {s} to patched version", .{dep.name}),
-            });
+fn extractVersionTag(name: []const u8) ?[]const u8 {
+    if (std.mem.lastIndexOfScalar(u8, name, '@')) |at_pos| {
+        const tag = name[at_pos + 1 ..];
+        for (tag, 0..) |c, i| {
+            if (std.ascii.isDigit(c)) return tag[i..];
         }
+    }
+    return null;
+}
+
+fn compareVersions(a: []const u8, b: []const u8) std.math.Order {
+    var it_a = std.mem.splitScalar(u8, a, '.');
+    var it_b = std.mem.splitScalar(u8, b, '.');
+    while (true) {
+        const part_a = it_a.next();
+        const part_b = it_b.next();
+        if (part_a == null and part_b == null) return .eq;
+        if (part_a == null) return .lt;
+        if (part_b == null) return .gt;
+        const va = std.fmt.parseInt(u64, part_a.?, 10) catch return .eq;
+        const vb = std.fmt.parseInt(u64, part_b.?, 10) catch return .eq;
+        if (va < vb) return .lt;
+        if (va > vb) return .gt;
+    }
+}
+
+fn checkVulnerabilities(name: []const u8, dep: *DependencyInfo, findings: *std.ArrayList(DependencyFinding), allocator: Allocator) !void {
+    var vuln_list = std.ArrayList(VulnerabilityInfo).init(allocator);
+    defer vuln_list.deinit();
+    var any_match = false;
+    const extracted_version = extractVersionTag(name);
+
+    for (known_vulnerable_versions) |known| {
+        if (!utils.asciiContainsIgnoreCase(name, known.name)) continue;
+
+        const version_is_known = extracted_version != null;
+        const version_matches = if (extracted_version) |ver|
+            compareVersions(ver, known.version) == .eq
+        else
+            false;
+
+        if (version_is_known and !version_matches) continue;
+
+        const confirmed = version_matches;
+        any_match = true;
+
+        const vuln_description = if (confirmed)
+            try std.fmt.allocPrint(allocator, "Known vulnerability in {s} (version {s} matches known affected version {s})", .{ known.name, extracted_version.?, known.version })
+        else
+            try std.fmt.allocPrint(allocator, "Possible vulnerability in {s} — version not confirmed (known affected version: {s})", .{ known.name, known.version });
+
+        try vuln_list.append(.{
+            .cve_id = known.cve,
+            .cve_score = if (confirmed) known.score else known.score * 0.5,
+            .severity = if (confirmed)
+                (if (known.score >= 9.0) .critical else if (known.score >= 7.0) .high else if (known.score >= 4.0) .medium else .low)
+            else
+                .low,
+            .description = vuln_description,
+            .affected_versions = known.version,
+            .fix_version = "",
+            .known_exploitation = confirmed and known.score >= 8.0,
+        });
+
+        const finding_desc = if (confirmed)
+            "Known vulnerability (confirmed version match)"
+        else
+            "Possible vulnerability — version not confirmed";
+        try findings.append(.{
+            .dependency_name = dep.name,
+            .issue_type = .known_vulnerability,
+            .severity = if (confirmed)
+                (if (known.score >= 9.0) @as(u8, 95) else if (known.score >= 7.0) @as(u8, 80) else @as(u8, 50))
+            else
+                30,
+            .cve_id = known.cve,
+            .description = finding_desc,
+            .recommendation = "Update to patched version",
+        });
+    }
+
+    if (any_match) {
+        dep.is_vulnerable = true;
+        if (extracted_version) |ver| dep.version = ver;
+        dep.deinit(allocator);
+        dep.vulnerabilities = try vuln_list.toOwnedSlice();
     }
 }
 

@@ -415,7 +415,7 @@ fn classifyKeyType(name: []const u8) KeyType {
     if (utils.containsAny(name, &.{ "RSA_4096", "rsa_4096" })) return .rsa_4096;
     if (utils.containsAny(name, &.{ "ECDSA_P256", "ecdsa_p256", "prime256v1" })) return .ecdsa_p256;
     if (utils.containsAny(name, &.{ "ECDSA_P384", "ecdsa_p384", "secp384r1" })) return .ecdsa_p384;
-    if (utils.containsAny(name, &.{ "DSA", "dsa" })) return .symmetric_des;
+    if (utils.containsAny(name, &.{ "DSA", "dsa" })) return .unknown;
     return .unknown;
 }
 
@@ -528,18 +528,6 @@ pub fn analyzeTLSConfiguration(allocator: Allocator, instrs: []const Decoded, im
 
             if (utils.containsAny(name, &.{ "SSL_CTX_set_verify", "set_verify" })) {
                 continue;
-            }
-
-            if (utils.containsAny(name, &.{ "SSL_CTX_set_options", "SSL_OP_NO_SSLv2", "SSL_OP_NO_SSLv3", "SSL_OP_NO_TLSv1" })) {
-                try findings.append(.{
-                    .address = instr.va,
-                    .function_va = 0,
-                    .issue = .certificate_validation_disabled,
-                    .severity = 85,
-                    .cipher = .unknown,
-                    .description = "TLS version restriction detected - may indicate legacy protocol support",
-                    .recommendation = "Disable TLS 1.0/1.1, require TLS 1.2+",
-                });
             }
 
             if (utils.containsAny(name, &.{ "SSL_CTX_set_cipher_list", "set_cipher" })) {

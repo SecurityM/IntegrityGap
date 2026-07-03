@@ -34,7 +34,7 @@ cd tests && bash run_tests.sh   # ~700 shell-based tests
 │   ├── core/                    # Core analysis pipeline
 │   │   ├── parser.zig           # ELF/PE/Mach-O binary parser (1148 lines)
 │   │   ├── decoder.zig          # x86/x86_64/ARM64 instruction decoder (989 lines)
-│   │   ├── analyzer.zig         # 6-dimension integrity gap scoring engine (888 lines)
+│   │   ├── analyzer.zig         # 10-dimension integrity gap scoring engine (888 lines)
 │   │   ├── signatures.zig       # Known API import signatures and call categorization (192 lines)
 │   │   └── utils.zig            # Integer reading, string utilities, hashing, entropy (228 lines)
 │   ├── analysis/                # Specialized analysis engines
@@ -84,7 +84,7 @@ integritygap --version
 | Flag | Default pipeline additions |
 |---|---|
 | `--all` | All enabled engines (default) |
-| `--integrity-gap` | 6-dimension core scoring only |
+| `--integrity-gap` | 10-dimension core scoring only |
 | `--concurrency` | Concurrency analysis engine |
 | `--taint` | Taint propagation analysis |
 | `--firmware` | Firmware image analysis |
@@ -134,7 +134,7 @@ The pipeline executes in this order:
 1. **main.zig** — reads file, parses CLI flags, selects modes
 2. **core/parser.zig** — detects format by magic bytes, parses headers/sections/symbols/imports
 3. **core/decoder.zig** — decodes executable sections into instructions, detects function boundaries, builds call graph
-4. **core/analyzer.zig** — profiles each function across 6 dimensions, collects evidence, classifies threat
+4. **core/analyzer.zig** — profiles each function across 10 dimensions (error_handling, resource_lifecycle, input_validation, cryptographic, logging_auditability, cleanup, concurrency, memory_safety, configuration, supply_chain), collects evidence, classifies threat
 5. **analysis/*.zig** — optional specialized engines (selected by mode flag)
 6. **postproc/*.zig** — optional post-processing (FP reduction, CVSS, STRIDE, remediation, caching)
 7. **output/reporter.zig** or **output/report_engine.zig** — serializes results to requested format
@@ -170,7 +170,7 @@ If 4+ functions exist, scores are normalized against the local population:
 
 ### Engine-Level Scores
 
-Each specialized analysis engine outputs its own score (0–100 or 0–100%), independent of the per-function categories:
+Each specialized analysis engine outputs its own score (0–100 or 0–100%). These engine-level scores also feed back into the corresponding per-function category scores at a reduced weight (8–10%) to ensure that engine-level findings influence the core aggregate gap, anomaly confidence, and threat classification:
 
 | Engine | Score field | Range | Meaning |
 |---|---|---|---|
@@ -283,6 +283,8 @@ Tracks data flow from 12 source types (network, file, user input, env var, regis
 ### firmware_integrity.zig
 Detects firmware format (UEFI FV, Intel ME, U-Boot, Android bootimg, cpio, initramfs). Checks: hash mismatches, missing signatures, certificate validation, rollback detection, backdoor strings.
 
+When invoked with `--firmware` alone (without `--html`/`--md`/`--sarif`), firmware analysis runs standalone and produces its own output. When combined with `--html`/`--md`/`--sarif` in `--all` mode, firmware results are included in the comprehensive report alongside all other engines.
+
 ### crypto_auditor.zig
 Identifies cipher algorithms (AES, DES, 3DES, RC4, ChaCha20, etc.). Detects: weak ciphers, hardcoded keys, static IVs, ECB mode, weak randomness, deprecated hashes, missing authentication, certificate validation bypass.
 
@@ -297,6 +299,8 @@ Detects: unbounded string copies (strcpy, sprintf, gets), format string vulnerab
 
 ### dependency_checker.zig
 Matches dependency names against 30+ embedded CVE records (OpenSSL: CVE-2014-0160 Heartbleed, CVE-2022-3602; log4j: CVE-2021-44228; curl, zlib, libpng, libssh2, sqlite3, etc.). Detects dependency types by filename pattern. Identifies SPDX licenses.
+
+**Note:** The CVE database is statically compiled into the binary at build time. It reflects known vulnerabilities up to the release date of this version (v2.1.0). There is no live update mechanism — the database is a snapshot, not a live feed. To update, rebuild the binary against the latest source.
 
 ### config_auditor.zig
 Searches binary sections for hardcoded credential patterns (password, secret, api_key, token, connection_string). Detects insecure defaults (admin, root, default, debug), disabled security, verbose errors, permissive permissions. Produces security control inventory (12 controls).
@@ -349,6 +353,12 @@ Loads shared libraries (.so, .dylib, .dll) via `std.DynLib`. 8 hook points: pre/
 - Plugin system, config file support, batch processing, result caching
 - Modular file structure (27 files vs 1 file)
 - All scores and thresholds adjusted for large binaries
+
+## CVE Database
+
+The dependency checker includes 29 hardcoded CVE entries (e.g., OpenSSL 1.1.1 → CVE-2022-3602)
+compiled into the binary at build time. This is a static snapshot and is **not** dynamically updated.
+The database was last reviewed for the v2.1.0 release. Rebuild the binary to refresh from source.
 
 ## License
 

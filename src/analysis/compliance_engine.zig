@@ -48,9 +48,17 @@ pub const ComplianceCategory = enum {
     business_continuity,
 };
 
+pub const Confidence = enum {
+    confirmed,
+    likely,
+    heuristic,
+    unknown,
+};
+
 pub const ComplianceFinding = struct {
     requirement: ComplianceRequirement,
     status: ComplianceStatus,
+    confidence: Confidence = .unknown,
     evidence: []const u8 = "",
     recommendation: []const u8 = "",
     function_va: u64 = 0,
@@ -312,49 +320,40 @@ pub fn loadFrameworkRequirements(framework: RegulatoryFramework, allocator: Allo
     return copied;
 }
 
-fn checkEncryptionRequirement(_: []const u8, instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) bool {
-    for (functions) |fn_span| {
-        const func_instrs = instrs[fn_span.instr_start..fn_span.instr_end];
-        for (func_instrs) |instr| {
-            if (instr.kind == .call) {
-                const resolved = decoder.resolveCallInfo(image, instr);
-                if (utils.containsAny(resolved.name, &.{ "Encrypt", "encrypt", "AES", "GCM", "CBC", "CryptEncrypt", "BCryptEncrypt" })) {
-                    return true;
-                }
-            }
-        }
+fn isStripped(image: BinaryImage) bool {
+    for (image.symbols) |sym| {
+        if (sym.is_function and !sym.external) return false;
     }
-    return false;
+    return true;
 }
 
-fn checkLoggingRequirement(instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) bool {
+fn heuristicCheck(instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan, patterns: []const []const u8) ?bool {
+    var found: bool = false;
     for (functions) |fn_span| {
         const func_instrs = instrs[fn_span.instr_start..fn_span.instr_end];
         for (func_instrs) |instr| {
             if (instr.kind == .call) {
                 const resolved = decoder.resolveCallInfo(image, instr);
-                if (utils.containsAny(resolved.name, &.{ "log", "syslog", "event", "audit", "trail" })) {
-                    return true;
+                if (utils.containsAny(resolved.name, patterns)) {
+                    found = true;
                 }
             }
         }
     }
-    return false;
+    if (!found and isStripped(image)) return null;
+    return found;
 }
 
-fn checkAccessControlMechanism(instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) bool {
-    for (functions) |fn_span| {
-        const func_instrs = instrs[fn_span.instr_start..fn_span.instr_end];
-        for (func_instrs) |instr| {
-            if (instr.kind == .call) {
-                const resolved = decoder.resolveCallInfo(image, instr);
-                if (utils.containsAny(resolved.name, &.{ "authenticate", "login", "authorize", "permission", "access_check", "verify_identity" })) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
+fn checkEncryptionRequirement(_: []const u8, instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) ?bool {
+    return heuristicCheck(instrs, image, functions, &.{ "Encrypt", "encrypt", "AES", "GCM", "CBC", "CryptEncrypt", "BCryptEncrypt" });
+}
+
+fn checkLoggingRequirement(instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) ?bool {
+    return heuristicCheck(instrs, image, functions, &.{ "log", "syslog", "event", "audit", "trail" });
+}
+
+fn checkAccessControlMechanism(instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) ?bool {
+    return heuristicCheck(instrs, image, functions, &.{ "authenticate", "login", "authorize", "permission", "access_check", "verify_identity" });
 }
 
 pub fn runComplianceCheck(allocator: Allocator, framework: RegulatoryFramework, bytes: []const u8, instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) !ComplianceReport {
@@ -371,10 +370,12 @@ pub fn runComplianceCheck(allocator: Allocator, framework: RegulatoryFramework, 
     var partial: usize = 0;
 
     for (requirements) |req| {
-        const status = try evaluateRequirement(req, allocator, bytes, instrs, image, functions);
+        var conf: Confidence = .unknown;
+        const status = try evaluateRequirement(req, allocator, bytes, instrs, image, functions, &conf);
         try findings.append(.{
             .requirement = req,
             .status = status,
+            .confidence = conf,
             .evidence = "",
             .recommendation = getRecommendation(req, status),
         });
@@ -388,8 +389,8 @@ pub fn runComplianceCheck(allocator: Allocator, framework: RegulatoryFramework, 
         }
     }
 
-    const score = if (passed + failed == 0) 100.0 else
-        @as(f64, @floatFromInt(passed)) * 100.0 / @as(f64, @floatFromInt(passed + failed));
+    const score = if (passed + failed + partial == 0) 100.0 else
+        @as(f64, @floatFromInt(passed)) * 100.0 / @as(f64, @floatFromInt(passed + failed + partial));
 
     return .{
         .framework = framework,
@@ -405,73 +406,42 @@ pub fn runComplianceCheck(allocator: Allocator, framework: RegulatoryFramework, 
     };
 }
 
-fn evaluateRequirement(req: ComplianceRequirement, _: Allocator, bytes: []const u8, instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) !ComplianceStatus {
+fn evaluateRequirement(req: ComplianceRequirement, _: Allocator, bytes: []const u8, instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan, confidence: *Confidence) !ComplianceStatus {
     if (!req.automated_check) return .not_checked;
+    confidence.* = .heuristic;
 
-    switch (req.category) {
-        .encryption => {
-            if (checkEncryptionRequirement(bytes, instrs, image, functions)) return .compliant;
-            return .non_compliant;
-        },
-        .logging_monitoring => {
-            if (checkLoggingRequirement(instrs, image, functions)) return .compliant;
-            return .non_compliant;
-        },
-        .access_control => {
-            if (checkAccessControlMechanism(instrs, image, functions)) return .compliant;
-            return .non_compliant;
-        },
-        .data_protection => {
-            if (checkEncryptionRequirement(bytes, instrs, image, functions)) return .compliant;
-            return .non_compliant;
-        },
-        .network_security => {
-            if (checkNetworkSecurity(instrs, image, functions)) return .compliant;
-            return .partial;
-        },
-        .configuration_management => {
-            if (checkConfigurationManagement(instrs, image, functions)) return .partial;
-            return .not_checked;
-        },
-        .vulnerability_management => {
-            return .not_checked;
-        },
+    const result: ?bool = switch (req.category) {
+        .encryption => checkEncryptionRequirement(bytes, instrs, image, functions),
+        .logging_monitoring => checkLoggingRequirement(instrs, image, functions),
+        .access_control => checkAccessControlMechanism(instrs, image, functions),
+        .data_protection => checkEncryptionRequirement(bytes, instrs, image, functions),
+        .network_security => checkNetworkSecurity(instrs, image, functions),
+        .configuration_management => checkConfigurationManagement(instrs, image, functions),
+        .vulnerability_management => null,
         else => return .not_checked,
+    };
+
+    if (result) |found| {
+        if (found) {
+            confidence.* = .likely;
+            return .compliant;
+        }
+        return .non_compliant;
     }
+    confidence.* = .unknown;
+    return .partial;
 }
 
-fn checkNetworkSecurity(instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) bool {
-    for (functions) |fn_span| {
-        const func_instrs = instrs[fn_span.instr_start..fn_span.instr_end];
-        for (func_instrs) |instr| {
-            if (instr.kind == .call) {
-                const resolved = decoder.resolveCallInfo(image, instr);
-                if (utils.containsAny(resolved.name, &.{ "TLS", "SSL", "https", "secure_", "certificate", "verify_cert" })) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
+fn checkNetworkSecurity(instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) ?bool {
+    return heuristicCheck(instrs, image, functions, &.{ "TLS", "SSL", "https", "secure_", "certificate", "verify_cert" });
 }
 
-fn checkConfigurationManagement(instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) bool {
-    for (functions) |fn_span| {
-        const func_instrs = instrs[fn_span.instr_start..fn_span.instr_end];
-        for (func_instrs) |instr| {
-            if (instr.kind == .call) {
-                const resolved = decoder.resolveCallInfo(image, instr);
-                if (utils.containsAny(resolved.name, &.{ "config", "setting", "option", "parameter", "default" })) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
+fn checkConfigurationManagement(instrs: []const Decoded, image: BinaryImage, functions: []const FunctionSpan) ?bool {
+    return heuristicCheck(instrs, image, functions, &.{ "config", "setting", "option", "parameter", "default" });
 }
 
 fn getRecommendation(req: ComplianceRequirement, status: ComplianceStatus) []const u8 {
-    if (status == .compliant) return "Already compliant";
+    if (status == .compliant) return "Possible evidence of compliance detected via heuristic analysis — verify manually";
     return switch (req.category) {
         .encryption => "Implement strong encryption (AES-256-GCM or ChaCha20-Poly1305) for data protection",
         .logging_monitoring => "Implement comprehensive audit logging covering all security events",

@@ -75,7 +75,7 @@ fn categorizeRemediationType(category: []const u8) RemediationCategory {
 }
 
 fn estimateEffort(category: []const u8, severity: u8) u32 {
-    const base = if (severity >= 80) 16 else if (severity >= 60) 8 else if (severity >= 40) 4 else 2;
+    const base: u32 = if (severity >= 80) 16 else if (severity >= 60) 8 else if (severity >= 40) 4 else 2;
     if (std.mem.eql(u8, category, "cryptographic") or std.mem.eql(u8, category, "crypto")) return base * 3;
     if (std.mem.eql(u8, category, "concurrency")) return base * 2;
     if (std.mem.eql(u8, category, "compliance")) return base * 2;
@@ -200,7 +200,7 @@ fn getReferences(category: []const u8) []const []const u8 {
 }
 
 pub fn prioritizeRemediations(suggestions: []RemediationSuggestion, allocator: Allocator) ![]RemediationSuggestion {
-    var sorted = try allocator.alloc(RemediationSuggestion, suggestions.len);
+    const sorted = try allocator.alloc(RemediationSuggestion, suggestions.len);
     @memcpy(sorted, suggestions);
     std.mem.sort(RemediationSuggestion, sorted, {}, struct {
         fn less(_: void, a: RemediationSuggestion, b: RemediationSuggestion) bool {

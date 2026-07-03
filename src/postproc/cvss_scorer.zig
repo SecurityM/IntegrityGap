@@ -134,30 +134,30 @@ pub fn computeBaseScore(vec: CvssVector) f64 {
     if (impact <= 0) return 0;
     var score: f64 = undefined;
     if (vec.scope == .unchanged) {
-        score = std.math.min(impact + exploitability, 10.0);
+        score = @min(impact + exploitability, 10.0);
     } else {
-        score = std.math.min(1.08 * (impact + exploitability), 10.0);
+        score = @min(1.08 * (impact + exploitability), 10.0);
     }
     score = roundTo1Decimal(score);
     return score;
 }
 
 pub fn computeTemporalScore(base: f64, vec: CvssVector) f64 {
-    const ecm = switch (vec.exploit_code_maturity) {
+    const ecm: f64 = switch (vec.exploit_code_maturity) {
         .not_defined => 1.0,
         .unproven => 0.91,
         .proof_of_concept => 0.94,
         .functional => 0.97,
         .high => 1.0,
     };
-    const rl = switch (vec.remediation_level) {
+    const rl: f64 = switch (vec.remediation_level) {
         .not_defined => 1.0,
         .official_fix => 0.87,
         .temporary_fix => 0.90,
         .workaround => 0.95,
         .unavailable => 1.0,
     };
-    const rc = switch (vec.report_confidence) {
+    const rc: f64 = switch (vec.report_confidence) {
         .not_defined => 1.0,
         .unknown => 0.92,
         .reasonable => 0.96,

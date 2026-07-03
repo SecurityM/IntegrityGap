@@ -172,7 +172,7 @@ pub fn reduceFalsePositives(allocator: Allocator, evidence: []const types.Eviden
     var adjusted: usize = 0;
 
     for (evidence) |ev| {
-        const ctx = analyzeContext(ev, instrs, image, functions);
+        var ctx = analyzeContext(ev, instrs, image, functions);
         if (ctx.remove) {
             removed += 1;
             try adjustments.append(.{

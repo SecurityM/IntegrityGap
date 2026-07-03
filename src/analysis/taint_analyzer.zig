@@ -65,6 +65,7 @@ pub const TaintPropagation = struct {
 
     pub fn deinit(self: *@This(), allocator: Allocator) void {
         allocator.free(self.function_vas);
+        allocator.free(self.description);
     }
 };
 
@@ -194,6 +195,41 @@ pub fn analyzeTaint(allocator: Allocator, instrs: []const Decoded, image: Binary
     var sink_map = std.AutoHashMap(u64, DataFlowSink).init(allocator);
     defer sink_map.deinit();
 
+    var func_by_va = std.AutoHashMap(u64, usize).init(allocator);
+    defer func_by_va.deinit();
+    for (functions, 0..) |func, i| {
+        try func_by_va.put(func.start, i);
+    }
+
+    var edges_from = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator);
+    defer {
+        var it = edges_from.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        edges_from.deinit();
+    }
+    var edges_to = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator);
+    defer {
+        var it = edges_to.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        edges_to.deinit();
+    }
+    for (call_edges) |edge| {
+        const f_entry = try edges_from.getOrPut(edge.from);
+        if (!f_entry.found_existing) {
+            f_entry.value_ptr.* = std.ArrayList(u64).init(allocator);
+        }
+        try f_entry.value_ptr.*.append(edge.to);
+        const t_entry = try edges_to.getOrPut(edge.to);
+        if (!t_entry.found_existing) {
+            t_entry.value_ptr.* = std.ArrayList(u64).init(allocator);
+        }
+        try t_entry.value_ptr.*.append(edge.from);
+    }
+
     for (functions) |function| {
         const func_instrs = instrs[function.instr_start..function.instr_end];
         for (func_instrs) |instr| {
@@ -233,16 +269,14 @@ pub fn analyzeTaint(allocator: Allocator, instrs: []const Decoded, image: Binary
     for (call_edges) |edge| {
         for (sources.items) |src| {
             if (src.function_va == edge.from) {
-                for (functions) |fn_dst| {
-                    if (fn_dst.start == edge.to) {
-                        try interprocedural_sources.append(.{
-                            .va = fn_dst.start,
-                            .function_va = fn_dst.start,
-                            .source_type = src.source_type,
-                            .reg = .rax,
-                            .description = src.description,
-                        });
-                    }
+                if (func_by_va.contains(edge.to)) {
+                    try interprocedural_sources.append(.{
+                        .va = edge.to,
+                        .function_va = edge.to,
+                        .source_type = src.source_type,
+                        .reg = .rax,
+                        .description = src.description,
+                    });
                 }
             }
         }
@@ -260,10 +294,15 @@ pub fn analyzeTaint(allocator: Allocator, instrs: []const Decoded, image: Binary
     var high_severity: usize = 0;
     var critical_severity: usize = 0;
 
+    const max_source_sink_pairs: usize = 200;
+    var pairs_checked: usize = 0;
+
     for (sources.items) |source| {
         for (sinks.items) |sink| {
             total_paths += 1;
-            const path = try traceTaintPath(allocator, instrs, functions, call_edges, source, sink, image);
+            if (pairs_checked >= max_source_sink_pairs) continue;
+            pairs_checked += 1;
+            const path = try traceTaintPath(allocator, instrs, functions, func_by_va, edges_from, edges_to, source, sink, image);
             if (path) |_| {
                 var p = path.?;
                 if (p.sanitized) {
@@ -292,7 +331,7 @@ pub fn analyzeTaint(allocator: Allocator, instrs: []const Decoded, image: Binary
     };
 }
 
-fn traceTaintPath(allocator: Allocator, instrs: []const Decoded, functions: []const FunctionSpan, call_edges: []const CallEdge, source: DataFlowSource, sink: DataFlowSink, image: BinaryImage) !?TaintPropagation {
+fn traceTaintPath(allocator: Allocator, instrs: []const Decoded, functions: []const FunctionSpan, func_by_va: std.AutoHashMap(u64, usize), edges_from: std.AutoHashMap(u64, std.ArrayList(u64)), edges_to: std.AutoHashMap(u64, std.ArrayList(u64)), source: DataFlowSource, sink: DataFlowSink, image: BinaryImage) !?TaintPropagation {
     var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
 
@@ -325,11 +364,11 @@ fn traceTaintPath(allocator: Allocator, instrs: []const Decoded, functions: []co
 
         if (current.depth >= 20) break;
 
-        for (call_edges) |edge| {
-            if (edge.from == current.func_va) {
-                if (!visited.contains(edge.to) and tail < queue_size) {
-                    try visited.put(edge.to, {});
-                    queue[tail] = .{ .func_va = edge.to, .depth = current.depth + 1 };
+        if (edges_from.get(current.func_va)) |dests| {
+            for (dests.items) |dst| {
+                if (!visited.contains(dst) and tail < queue_size) {
+                    try visited.put(dst, {});
+                    queue[tail] = .{ .func_va = dst, .depth = current.depth + 1 };
                     tail += 1;
                 }
             }
@@ -347,10 +386,9 @@ fn traceTaintPath(allocator: Allocator, instrs: []const Decoded, functions: []co
     while (depth > 0) {
         reverse_path[rp_len] = current_search;
         rp_len += 1;
-        for (call_edges) |edge| {
-            if (edge.to == current_search) {
-                current_search = edge.from;
-                break;
+        if (edges_to.get(current_search)) |callers| {
+            if (callers.items.len > 0) {
+                current_search = callers.items[0];
             }
         }
         depth -= 1;
@@ -367,16 +405,15 @@ fn traceTaintPath(allocator: Allocator, instrs: []const Decoded, functions: []co
     var sanitized = false;
     var sanitization: []const u8 = "";
     for (path_funcs.items) |func_va| {
-        for (functions) |func| {
-            if (func.start == func_va) {
-                const func_instrs = instrs[func.instr_start..func.instr_end];
-                for (func_instrs) |instr| {
-                    if (instr.kind == .call) {
-                        const resolved = decoder.resolveCallInfo(image, instr);
-                        if (isSanitizationFunction(resolved.name)) |stype| {
-                            sanitized = true;
-                            sanitization = stype;
-                        }
+        if (func_by_va.get(func_va)) |func_idx| {
+            const func = functions[func_idx];
+            const func_instrs = instrs[func.instr_start..func.instr_end];
+            for (func_instrs) |instr| {
+                if (instr.kind == .call) {
+                    const resolved = decoder.resolveCallInfo(image, instr);
+                    if (isSanitizationFunction(resolved.name)) |stype| {
+                        sanitized = true;
+                        sanitization = stype;
                     }
                 }
             }
@@ -474,7 +511,7 @@ pub fn analyzeTaintInFunction(allocator: Allocator, instrs: []const Decoded, fun
                             .function_vas = path_funcs,
                             .severity = classifyTaintSeverity(tracked_regs[i].source, sink, false),
                             .sanitized = false,
-                            .description = "Intra-function taint propagation detected",
+                            .description = try std.fmt.allocPrint(allocator, "Intra-function taint propagation detected"),
                         });
                         tracked_regs[i].tainted = false;
                     }

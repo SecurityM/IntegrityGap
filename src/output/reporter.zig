@@ -20,10 +20,10 @@ pub fn writeJsonStdout(analysis: Analysis) !void {
     try writeAnalysisJson(std.io.getStdOut().writer(), analysis);
 }
 
-fn writeAnalysisJson(w: anytype, analysis: Analysis) !void {
+pub fn writeAnalysisJson(w: anytype, analysis: Analysis) !void {
     try w.writeAll("{\n");
     try w.writeAll("  \"tool\": \"IntegrityGap\",\n");
-    try w.writeAll("  \"version\": \"2.0\",\n");
+    try w.writeAll("  \"version\": \"2.1\",\n");
     try w.writeAll("  \"target\": ");
     try writeJsonString(w, analysis.target_path);
     try w.writeAll(",\n");
@@ -31,6 +31,9 @@ fn writeAnalysisJson(w: anytype, analysis: Analysis) !void {
     try writeHexHash(w, analysis.sha256);
     try w.writeAll("\",\n");
     try w.print("  \"format\": \"{s}\",\n", .{@tagName(analysis.image.format)});
+    try w.print("  \"classification\": \"{s}\",\n", .{@tagName(analysis.summary.threat)});
+    try w.print("  \"gap_score\": {d:.2},\n", .{analysis.summary.aggregate_gap});
+    try w.print("  \"confidence\": {d:.2},\n", .{analysis.summary.anomaly_confidence});
     try w.print("  \"arch\": \"{s}\",\n", .{@tagName(analysis.image.arch)});
     try w.print("  \"entry_va\": \"0x{x}\",\n", .{analysis.image.entry_va});
     try w.print("  \"executable_sections\": {},\n", .{parser.countExecSections(analysis.image)});
@@ -87,8 +90,8 @@ fn writeSummaryJson(w: anytype, summary: Summary, indent: []const u8) !void {
 
 fn writeScoresJson(w: anytype, scores: CategoryScores) !void {
     try w.print(
-        "{{\"error_handling\":{d:.2},\"resource_lifecycle\":{d:.2},\"input_validation\":{d:.2},\"cryptographic\":{d:.2},\"logging_auditability\":{d:.2},\"cleanup\":{d:.2}}}",
-        .{ scores.error_handling, scores.resource_lifecycle, scores.input_validation, scores.cryptographic, scores.logging_auditability, scores.cleanup },
+        "{{\"error_handling\":{d:.2},\"resource_lifecycle\":{d:.2},\"input_validation\":{d:.2},\"cryptographic\":{d:.2},\"logging_auditability\":{d:.2},\"cleanup\":{d:.2},\"concurrency\":{d:.2},\"memory_safety\":{d:.2},\"configuration\":{d:.2},\"supply_chain\":{d:.2}}}",
+        .{ scores.error_handling, scores.resource_lifecycle, scores.input_validation, scores.cryptographic, scores.logging_auditability, scores.cleanup, scores.concurrency, scores.memory_safety, scores.configuration, scores.supply_chain },
     );
 }
 
@@ -146,18 +149,22 @@ fn writeEvidenceJson(w: anytype, ev: Evidence, indent: []const u8) !void {
 pub fn writePlain(analysis: Analysis) !void {
     const w = std.io.getStdOut().writer();
     try w.print("IntegrityGap: {s}\n", .{analysis.target_path});
-    try w.print("Format: {s}/{s}  Entry: 0x{x}\n", .{ @tagName(analysis.image.format), @tagName(analysis.image.arch), analysis.image.entry_va });
-    try w.print("Classification: {s}  Gap: {d:.2}  Confidence: {d:.2}\n", .{ @tagName(analysis.summary.threat), analysis.summary.aggregate_gap, analysis.summary.anomaly_confidence });
-    try w.print("Scores: error={d:.1} resource={d:.1} input={d:.1} crypto={d:.1} logging={d:.1} cleanup={d:.1}\n", .{
+    try w.print("Formato: {s}/{s}  Entry: 0x{x}\n", .{ @tagName(analysis.image.format), @tagName(analysis.image.arch), analysis.image.entry_va });
+    try w.print("Classificacao: {s}  Gap: {d:.2}  Confidence: {d:.2}\n", .{ @tagName(analysis.summary.threat), analysis.summary.aggregate_gap, analysis.summary.anomaly_confidence });
+    try w.print("Scores: error={d:.1} resource={d:.1} input={d:.1} crypto={d:.1} logging={d:.1} cleanup={d:.1} concurrency={d:.1} memory={d:.1} config={d:.1} supply_chain={d:.1}\n", .{
         analysis.summary.scores.error_handling,
         analysis.summary.scores.resource_lifecycle,
         analysis.summary.scores.input_validation,
         analysis.summary.scores.cryptographic,
         analysis.summary.scores.logging_auditability,
         analysis.summary.scores.cleanup,
+        analysis.summary.scores.concurrency,
+        analysis.summary.scores.memory_safety,
+        analysis.summary.scores.configuration,
+        analysis.summary.scores.supply_chain,
     });
-    try w.print("Functions identified/analyzed: {}/{}  Instructions: {}  Evidences: {}\n", .{ analysis.functions.len, analysis.profiles.len, analysis.instructions.len, analysis.evidence.len });
-    try w.writeAll("\nFunctions with material gap:\n");
+    try w.print("Funcoes identificadas/analisadas: {}/{}  Instrucoes: {}  Evidencias: {}\n", .{ analysis.functions.len, analysis.profiles.len, analysis.instructions.len, analysis.evidence.len });
+    try w.writeAll("\nFuncoes com material gap:\n");
     var shown: usize = 0;
     for (analysis.profiles) |profile| {
         if (profile.aggregate_gap < 18 and profile.confidence < 35) continue;
@@ -284,7 +291,7 @@ fn writeDiffJsonTo(w: anytype, base: Analysis, other: Analysis, baseline_mode: b
 
 fn writeScoresDeltaJson(w: anytype, a: CategoryScores, b: CategoryScores) !void {
     try w.print(
-        "{{\"error_handling\":{d:.2},\"resource_lifecycle\":{d:.2},\"input_validation\":{d:.2},\"cryptographic\":{d:.2},\"logging_auditability\":{d:.2},\"cleanup\":{d:.2}}}",
+        "{{\"error_handling\":{d:.2},\"resource_lifecycle\":{d:.2},\"input_validation\":{d:.2},\"cryptographic\":{d:.2},\"logging_auditability\":{d:.2},\"cleanup\":{d:.2},\"concurrency\":{d:.2},\"memory_safety\":{d:.2},\"configuration\":{d:.2},\"supply_chain\":{d:.2}}}",
         .{
             b.error_handling - a.error_handling,
             b.resource_lifecycle - a.resource_lifecycle,
@@ -292,6 +299,10 @@ fn writeScoresDeltaJson(w: anytype, a: CategoryScores, b: CategoryScores) !void 
             b.cryptographic - a.cryptographic,
             b.logging_auditability - a.logging_auditability,
             b.cleanup - a.cleanup,
+            b.concurrency - a.concurrency,
+            b.memory_safety - a.memory_safety,
+            b.configuration - a.configuration,
+            b.supply_chain - a.supply_chain,
         },
     );
 }
@@ -303,8 +314,12 @@ fn scoreSimilarity(a: CategoryScores, b: CategoryScores) f64 {
         @abs(a.input_validation - b.input_validation) +
         @abs(a.cryptographic - b.cryptographic) +
         @abs(a.logging_auditability - b.logging_auditability) +
-        @abs(a.cleanup - b.cleanup);
-    const clamped = if (100.0 - dist / 6.0 < 0) 0 else if (100.0 - dist / 6.0 > 100) 100 else 100.0 - dist / 6.0;
+        @abs(a.cleanup - b.cleanup) +
+        @abs(a.concurrency - b.concurrency) +
+        @abs(a.memory_safety - b.memory_safety) +
+        @abs(a.configuration - b.configuration) +
+        @abs(a.supply_chain - b.supply_chain);
+    const clamped = if (100.0 - dist / 10.0 < 0) 0 else if (100.0 - dist / 10.0 > 100) 100 else 100.0 - dist / 10.0;
     return clamped;
 }
 
@@ -328,6 +343,10 @@ fn writeSemanticChangesJson(w: anytype, base: CategoryScores, other: CategorySco
         "cryptographic",
         "logging_auditability",
         "cleanup",
+        "concurrency",
+        "memory_safety",
+        "configuration",
+        "supply_chain",
     };
     try w.writeAll("[");
     for (items, 0..) |name, idx| {
@@ -353,6 +372,10 @@ fn dominantDeltaCategory(base: CategoryScores, other: CategoryScores) []const u8
         .{ .name = "cryptographic", .delta = @abs(other.cryptographic - base.cryptographic) },
         .{ .name = "logging_auditability", .delta = @abs(other.logging_auditability - base.logging_auditability) },
         .{ .name = "cleanup", .delta = @abs(other.cleanup - base.cleanup) },
+        .{ .name = "concurrency", .delta = @abs(other.concurrency - base.concurrency) },
+        .{ .name = "memory_safety", .delta = @abs(other.memory_safety - base.memory_safety) },
+        .{ .name = "configuration", .delta = @abs(other.configuration - base.configuration) },
+        .{ .name = "supply_chain", .delta = @abs(other.supply_chain - base.supply_chain) },
     };
     for (candidates) |candidate| {
         if (candidate.delta > best) {
@@ -369,7 +392,11 @@ fn categoryDeltaByName(base: CategoryScores, other: CategoryScores, name: []cons
     if (std.mem.eql(u8, name, "input_validation")) return other.input_validation - base.input_validation;
     if (std.mem.eql(u8, name, "cryptographic")) return other.cryptographic - base.cryptographic;
     if (std.mem.eql(u8, name, "logging_auditability")) return other.logging_auditability - base.logging_auditability;
-    return other.cleanup - base.cleanup;
+    if (std.mem.eql(u8, name, "cleanup")) return other.cleanup - base.cleanup;
+    if (std.mem.eql(u8, name, "concurrency")) return other.concurrency - base.concurrency;
+    if (std.mem.eql(u8, name, "memory_safety")) return other.memory_safety - base.memory_safety;
+    if (std.mem.eql(u8, name, "configuration")) return other.configuration - base.configuration;
+    return other.supply_chain - base.supply_chain;
 }
 
 fn semanticChangeClass(name: []const u8, delta: f64) []const u8 {
@@ -380,7 +407,11 @@ fn semanticChangeClass(name: []const u8, delta: f64) []const u8 {
     if (std.mem.eql(u8, name, "input_validation")) return "weaker_input_validation";
     if (std.mem.eql(u8, name, "cryptographic")) return "weaker_crypto_integrity";
     if (std.mem.eql(u8, name, "logging_auditability")) return "weaker_auditability";
-    return "weaker_cleanup";
+    if (std.mem.eql(u8, name, "cleanup")) return "weaker_cleanup";
+    if (std.mem.eql(u8, name, "concurrency")) return "weaker_concurrency";
+    if (std.mem.eql(u8, name, "memory_safety")) return "weaker_memory_safety";
+    if (std.mem.eql(u8, name, "configuration")) return "weaker_configuration";
+    return "weaker_supply_chain";
 }
 
 fn writeJsonString(w: anytype, text: []const u8) !void {
@@ -521,7 +552,7 @@ pub fn writeComplianceSpecific(path: []const u8, analysis: Analysis, framework: 
 
     try w.writeAll("\n---\n");
     try w.writeAll("This is an automated assessment. Manual review by a qualified assessor is required for certification.\n");
-    try w.writeAll("Generated by IntegrityGap v2.0.0\n");
+    try w.writeAll("Generated by IntegrityGap v2.1.0\n");
 }
 
 pub fn writeEvidenceCsv(path: []const u8, analysis: Analysis) !void {

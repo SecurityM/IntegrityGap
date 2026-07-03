@@ -295,7 +295,7 @@ pub fn analyzeConcurrency(allocator: Allocator, instrs: []const Decoded, image: 
                 }
             }
 
-            if (instr.kind == .ret and lock_stack_len > 0 and isFunctionWithoutUnlock(func_instrs, local_idx)) {
+            if (instr.kind == .ret and lock_stack_len > 0 and isFunctionWithoutUnlock(func_instrs, local_idx, image)) {
                 try guarded_regions.append(.{
                     .start_va = last_lock_va orelse 0,
                     .end_va = instr.va,
@@ -404,7 +404,7 @@ fn isLikelySharedMemory(va: u64, image: BinaryImage) bool {
                     std.mem.indexOf(u8, name, "DATA") != null)
                     return true;
             }
-            return section.executable;
+            return false;
         }
     }
     return false;
@@ -464,15 +464,15 @@ fn isBlockingCall(name: []const u8) bool {
     });
 }
 
-fn isFunctionWithoutUnlock(func_instrs: []const Decoded, ret_idx: usize) bool {
-    const has_unlock = false;
+fn isFunctionWithoutUnlock(func_instrs: []const Decoded, ret_idx: usize, image: BinaryImage) bool {
     const end = @min(func_instrs.len, ret_idx + 1);
     for (func_instrs[0..end]) |instr| {
         if (instr.kind == .call) {
-            const name_lower = "release";
-            _ = name_lower;
+            const resolved = decoder.resolveCallInfo(image, instr);
+            if (matchLockFunction(resolved.name)) |lock| {
+                if (!lock.is_acquire) return false;
+            }
         }
-        _ = has_unlock;
     }
     return true;
 }

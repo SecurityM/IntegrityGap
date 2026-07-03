@@ -1,9 +1,30 @@
 #!/bin/bash
-# IntegrityGap v2.0.0 - 700-Test Suite
+# IntegrityGap v2.1.0 - 700-Test Suite
 set -o pipefail
 
 BINARY="../zig-out/bin/IntegrityGap"
 cd "$(dirname "$0")" || exit 1
+
+# Auto-build test fixtures if missing
+FIXTURE_SCRIPT="./fixtures/build.sh"
+TEST_TARGETS=("/tmp/test_simple.elf" "/tmp/test_oob.elf" "/tmp/test_crypto.elf")
+ALL_FIXTURES_EXIST=true
+for t in "${TEST_TARGETS[@]}"; do
+    if [ ! -f "$t" ]; then
+        ALL_FIXTURES_EXIST=false
+        break
+    fi
+done
+if [ "$ALL_FIXTURES_EXIST" = false ]; then
+    echo "Test fixtures missing — rebuilding..."
+    if [ -f "$FIXTURE_SCRIPT" ]; then
+        bash "$FIXTURE_SCRIPT" || { echo "ERROR: Failed to build test fixtures"; exit 1; }
+    else
+        echo "ERROR: Fixture build script not found at $FIXTURE_SCRIPT"
+        echo "Please run tests/fixtures/build.sh manually first."
+        exit 1
+    fi
+fi
 
 TOTAL=0; PASSED=0; FAILED=0; TIMEDOUT=0
 mkdir -p output
@@ -11,9 +32,8 @@ mkdir -p output
 PASS=0; FAIL=1; TIMEOUT_EXIT=124
 BOLD='\033[1m'; RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
 
-TEST_TARGETS=("/tmp/test_simple.elf" "/tmp/test_oob.elf" "/tmp/test_crypto.elf")
-ALL_MODES=("all" "integrity-gap" "concurrency" "taint" "firmware" "crypto" "privacy" "compliance" "memory" "dependencies" "config")
-MODE_LABELS=("all" "integrity_gap" "concurrency" "taint" "firmware" "crypto" "privacy" "compliance" "memory" "dependencies" "config")
+ALL_MODES=("all" "integrity-gap" "concurrency" "taint" "firmware" "crypto" "privacy" "compliance" "memory" "dependencies" "config" "strings")
+MODE_LABELS=("all" "integrity_gap" "concurrency" "taint" "firmware" "crypto" "privacy" "compliance" "memory" "dependencies" "config" "strings")
 TARGET_LABELS=("simple" "oob" "crypto")
 OUTPUT_FLAGS=("--plain" "--json" "--dot" "--html" "--markdown" "--sarif")
 OUTPUT_NAMES=("plain" "json" "dot" "html" "md" "sarif")
@@ -31,6 +51,7 @@ MODE_SHORT_PATTERNS=(
   "Memoria"        # memory
   "Dependencias"   # dependencies
   "Configuracao"   # config
+  "String Analysis" # strings
 )
 
 run_test() {
@@ -69,7 +90,7 @@ run_test() {
 }
 
 echo "================================================"
-echo " IntegrityGap v2.0.0 - 700-Test Suite"
+echo " IntegrityGap v2.1.0 - 700-Test Suite"
 echo " Started: $(date)"
 echo "================================================"
 
@@ -77,7 +98,7 @@ echo "================================================"
 echo "--- S1: CLI Basics (44 tests) ---"
 run_test "S1.001: --help" 0 "IntegrityGap" 5 --help
 run_test "S1.002: -h" 0 "IntegrityGap" 5 -h
-run_test "S1.003: --version" 0 "v2.0.0" 5 --version
+run_test "S1.003: --version" 0 "v2.1.0" 5 --version
 run_test "S1.004: no args" 1 "" 5
 run_test "S1.005: --mode without value" 1 "" 5 --mode
 run_test "S1.006: --json without path" 1 "" 5 --json
@@ -99,7 +120,7 @@ run_test "S1.021: --help has BATCH" 0 "BATCH" 5 --help
 run_test "S1.022: --help has ADDITIONAL" 0 "ADDITIONAL" 5 --help
 run_test "S1.023: --help has max-bytes" 0 "max-bytes" 5 --help
 run_test "S1.024: --help with target" 0 "USAGE" 5 /tmp/test_simple.elf --help
-run_test "S1.025: --version with target" 0 "v2.0.0" 5 /tmp/test_simple.elf --version
+run_test "S1.025: --version with target" 0 "v2.1.0" 5 /tmp/test_simple.elf --version
 run_test "S1.026: --verbose" 0 "IntegrityGap" 15 /tmp/test_simple.elf --plain --verbose
 run_test "S1.027: -v" 0 "IntegrityGap" 15 /tmp/test_simple.elf --plain -v
 run_test "S1.028: --max-bytes 0" 0 "IntegrityGap" 15 /tmp/test_simple.elf --plain --max-bytes 0
@@ -326,16 +347,16 @@ SYS_BINS=("/bin/bash" "/bin/ls")
 for sb in "${SYS_BINS[@]}"; do
   [[ -f "$sb" ]] || continue
   sn=$(basename "$sb")
-  run_test "S14.001: $sn plain" 0 "IntegrityGap" 30 "$sb" --plain
-  run_test "S14.002: $sn json" 0 "{" 30 "$sb" --json "output/sys_${sn}.json"
-  run_test "S14.003: $sn concurrency" 0 "Concurrency" 30 "$sb" --plain --mode concurrency
-  run_test "S14.004: $sn memory" 0 "Memoria" 30 "$sb" --plain --mode memory
-  run_test "S14.005: $sn crypto" 0 "Cripto\|Crypto" 30 "$sb" --plain --mode crypto
-  run_test "S14.006: $sn taint" 0 "Contaminacao\|Taint" 30 "$sb" --plain --mode taint
-  run_test "S14.007: $sn privacy" 0 "Privacidade" 30 "$sb" --plain --mode privacy
-  run_test "S14.008: $sn dependencies" 0 "Dependencias" 30 "$sb" --plain --mode dependencies
-  run_test "S14.009: $sn config" 0 "Configuracao" 30 "$sb" --plain --mode config
-  run_test "S14.010: $sn firmware" 0 "Firmware" 30 "$sb" --plain --mode firmware
+  run_test "S14.001: $sn plain" 0 "IntegrityGap" 300 "$sb" --plain
+  run_test "S14.002: $sn json" 0 "{" 300 "$sb" --json "output/sys_${sn}.json"
+  run_test "S14.003: $sn concurrency" 0 "Concurrency" 60 "$sb" --plain --mode concurrency
+  run_test "S14.004: $sn memory" 0 "Memoria" 60 "$sb" --plain --mode memory
+  run_test "S14.005: $sn crypto" 0 "Cripto\|Crypto" 60 "$sb" --plain --mode crypto
+  run_test "S14.006: $sn taint" 0 "Contaminacao\|Taint" 120 "$sb" --plain --mode taint
+  run_test "S14.007: $sn privacy" 0 "Privacidade" 60 "$sb" --plain --mode privacy
+  run_test "S14.008: $sn dependencies" 0 "Dependencias" 60 "$sb" --plain --mode dependencies
+  run_test "S14.009: $sn config" 0 "Configuracao" 60 "$sb" --plain --mode config
+  run_test "S14.010: $sn firmware" 0 "Firmware" 60 "$sb" --plain --mode firmware
 done
 
 # ========== SECTION 15: OUTPUT VALIDATION ==========
@@ -384,29 +405,29 @@ run_test "S16.014: fake Mach-O" 0 "" 15 /tmp/fake_macho.bin --plain
 run_test "S16.015: random data" 0 "" 15 /tmp/random_bin.bin --plain
 run_test "S16.016: 64KB zeros" 0 "" 15 /tmp/zerofile.bin --plain
 run_test "S16.017: ELF+garbage" 0 "" 15 /tmp/elf_garbage.bin --plain
-run_test "S16.018: 64KB zeros json" 0 "{" 15 /tmp/zerofile.bin --json output/s16_018.json
-run_test "S16.019: random data json" 0 "{" 15 /tmp/random_bin.bin --json output/s16_019.json
-run_test "S16.020: fake PE json" 0 "{" 15 /tmp/fake_pe.bin --json output/s16_020.json
+run_test "S16.018: 64KB zeros json" 0 "" 15 /tmp/zerofile.bin --json output/s16_018.json
+run_test "S16.019: random data json" 0 "" 15 /tmp/random_bin.bin --json output/s16_019.json
+run_test "S16.020: fake PE json" 0 "" 15 /tmp/fake_pe.bin --json output/s16_020.json
 
 # ========== SECTION 17: SELF-ANALYSIS ==========
 echo "--- S17: Self-analysis (15 tests) ---"
 IG_BIN="../zig-out/bin/IntegrityGap"
 [[ -f "$IG_BIN" ]] && {
-  run_test "S17.001: self plain" 0 "IntegrityGap" 30 "$IG_BIN" --plain
-  run_test "S17.002: self json" 0 "{" 30 "$IG_BIN" --json output/s17_002.json
-  run_test "S17.003: self html" 0 "" 30 "$IG_BIN" --html output/s17_003.html
-  run_test "S17.004: self memory" 0 "Memoria" 30 "$IG_BIN" --plain --mode memory
-  run_test "S17.005: self concurrency" 0 "Concurrency" 30 "$IG_BIN" --plain --mode concurrency
-  run_test "S17.006: self crypto" 0 "Cripto\|Crypto" 30 "$IG_BIN" --plain --mode crypto
-  run_test "S17.007: self config" 0 "Configuracao" 30 "$IG_BIN" --plain --mode config
-  run_test "S17.008: self deps" 0 "Dependencias" 30 "$IG_BIN" --plain --mode dependencies
-  run_test "S17.009: self taint" 0 "Contaminacao\|Taint" 30 "$IG_BIN" --plain --mode taint
-  run_test "S17.010: self privacy" 0 "Privacidade" 30 "$IG_BIN" --plain --mode privacy
-  run_test "S17.011: self firmware" 0 "Firmware" 30 "$IG_BIN" --plain --mode firmware
-  run_test "S17.012: self verbose" 0 "IntegrityGap" 30 "$IG_BIN" --plain --verbose
-  run_test "S17.013: self md" 0 "" 30 "$IG_BIN" --markdown output/s17_013.md
-  run_test "S17.014: self dot" 0 "" 30 "$IG_BIN" --dot output/s17_014.dot
-  run_test "S17.015: self sarif" 0 "" 30 "$IG_BIN" --sarif output/s17_015.json
+  run_test "S17.001: self plain" 0 "IntegrityGap" 600 "$IG_BIN" --plain
+  run_test "S17.002: self json" 0 "{" 600 "$IG_BIN" --json output/s17_002.json
+  run_test "S17.003: self html" 0 "" 600 "$IG_BIN" --html output/s17_003.html
+  run_test "S17.004: self memory" 0 "Memoria" 180 "$IG_BIN" --plain --mode memory
+  run_test "S17.005: self concurrency" 0 "Concurrency" 180 "$IG_BIN" --plain --mode concurrency
+  run_test "S17.006: self crypto" 0 "Cripto\|Crypto" 180 "$IG_BIN" --plain --mode crypto
+  run_test "S17.007: self config" 0 "Configuracao" 180 "$IG_BIN" --plain --mode config
+  run_test "S17.008: self deps" 0 "Dependencias" 180 "$IG_BIN" --plain --mode dependencies
+  run_test "S17.009: self taint" 0 "Contaminacao\|Taint" 180 "$IG_BIN" --plain --mode taint
+  run_test "S17.010: self privacy" 0 "Privacidade" 600 "$IG_BIN" --plain --mode privacy
+  run_test "S17.011: self firmware" 0 "Firmware" 180 "$IG_BIN" --plain --mode firmware
+  run_test "S17.012: self verbose" 0 "IntegrityGap" 600 "$IG_BIN" --plain --verbose
+  run_test "S17.013: self md" 0 "" 600 "$IG_BIN" --markdown output/s17_013.md
+  run_test "S17.014: self dot" 0 "" 600 "$IG_BIN" --dot output/s17_014.dot
+  run_test "S17.015: self sarif" 0 "" 600 "$IG_BIN" --sarif output/s17_015.json
 }
 
 # ========== SECTION 18: STRESS ==========

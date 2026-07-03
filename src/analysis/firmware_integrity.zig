@@ -197,7 +197,7 @@ fn discoverRegions(bytes: []const u8, format: FirmwareFormat, regions: *std.Arra
                 }
                 break :blk "";
             },
-            else => try std.fmt.allocPrint(regions.allocator, "region_{}", .{region_idx}),
+            else => "",
         };
 
         try regions.append(.{

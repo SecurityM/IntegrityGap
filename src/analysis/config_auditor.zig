@@ -114,7 +114,7 @@ pub fn auditConfiguration(allocator: Allocator, bytes: []const u8, instrs: []con
     errdefer controls.deinit();
 
     var hc_count: usize = 0;
-    const insecure_count: usize = 0;
+    var insecure_count: usize = 0;
     var disabled_count: usize = 0;
 
     for (image.sections) |section| {
@@ -161,6 +161,7 @@ pub fn auditConfiguration(allocator: Allocator, bytes: []const u8, instrs: []con
 
             for (insecure_default_patterns) |pattern| {
                 if (std.mem.indexOf(u8, data, pattern)) |_| {
+                    insecure_count += 1;
                     try settings.append(.{
                         .name = pattern,
                         .value = pattern,

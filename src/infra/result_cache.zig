@@ -39,6 +39,7 @@ pub const CacheStore = struct {
         var it = self.entries.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*.file_path);
             self.allocator.free(entry.value_ptr.*.result_data);
         }
         self.entries.deinit();
@@ -50,7 +51,7 @@ pub const CacheStore = struct {
 
         const entry = self.entries.get(key) orelse return null;
         if (entry.isExpired()) {
-            var owned = self.entries.get(key);
+            const owned = self.entries.get(key);
             if (owned) |e| {
                 self.allocator.free(e.result_data);
             }
@@ -88,7 +89,8 @@ pub const CacheStore = struct {
     }
 
     pub fn invalidate(self: *@This(), file_path: []const u8) !void {
-        const dir = try std.fs.cwd().openDir(self.config.directory, .{});
+        var cwd = std.fs.cwd();
+        var dir = try cwd.openDir(self.config.directory, .{});
         defer dir.close();
         dir.deleteFile(file_path) catch {};
         var it = self.entries.iterator();
@@ -104,7 +106,8 @@ pub const CacheStore = struct {
 
     pub fn clear(self: *@This()) !void {
         self.entries.clearAndFree();
-        const dir = std.fs.cwd().openDir(self.config.directory, .{}) catch return;
+        var cwd = std.fs.cwd();
+        var dir = cwd.openDir(self.config.directory, .{}) catch return;
         defer dir.close();
         var walker = try dir.walk(self.allocator);
         defer walker.deinit();
@@ -145,24 +148,25 @@ pub const CacheStore = struct {
     }
 
     fn writeToDisk(self: *@This(), file_path: []const u8, file_hash: u64, data: []const u8) !void {
-        std.fs.cwd().makeDir(self.config.directory) catch {};
+        var cwd = std.fs.cwd();
+        cwd.makeDir(self.config.directory) catch {};
         var cache_buf: [4096]u8 = undefined;
         const cpath = try self.cachePath(file_path, file_hash, &cache_buf);
-        const file = try std.fs.cwd().createFile(cpath, .{});
+        var file = try cwd.createFile(cpath, .{});
         defer file.close();
         try file.writeAll(data);
     }
 
     fn removeFromDisk(self: *@This(), file_path: []const u8) !void {
-        _ = self;
-        const dir = std.fs.cwd().openDir(self.config.directory, .{}) catch return;
+        var dir = try std.fs.cwd().openDir(self.config.directory, .{});
         defer dir.close();
         dir.deleteFile(file_path) catch {};
     }
 };
 
-pub fn hashFile(allocator: Allocator, path: []const u8) !u64 {
-    const file = try std.fs.cwd().openFile(path, .{});
+pub fn hashFile(_: Allocator, path: []const u8) !u64 {
+    var cwd = std.fs.cwd();
+    var file = try cwd.openFile(path, .{});
     defer file.close();
 
     var hasher = std.hash.XxHash64.init(0);

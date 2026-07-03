@@ -150,17 +150,19 @@ pub fn analyzeMemorySafety(allocator: Allocator, _: []const u8, instrs: []const 
 
     var unsafe_copy_count: usize = 0;
     var fmt_string_count: usize = 0;
-    var alloc_count: usize = 0;
-    var free_count: usize = 0;
+    var null_deref_count: usize = 0;
     const use_after_free_count: usize = 0;
     const buf_overflow_count: usize = 0;
-    var null_deref_count: usize = 0;
+    var memory_leak_count: usize = 0;
 
     for (functions) |function| {
         const func_instrs = instrs[function.instr_start..function.instr_end];
 
         const frame = analyzeStackFrame(func_instrs, function);
         try stack_frames.append(frame);
+
+        var alloc_count: usize = 0;
+        var free_count: usize = 0;
 
         var alloc_map = std.AutoHashMap(u64, u64).init(allocator);
         defer alloc_map.deinit();
@@ -173,13 +175,31 @@ pub fn analyzeMemorySafety(allocator: Allocator, _: []const u8, instrs: []const 
                     const dst = instr.operand(0);
                     const src = instr.operand(1);
                     if (dst.kind == .reg and src.kind == .imm and src.imm == 0) {
-                        if (frame.stack_protector_level == .none and frame.frame_size > 0) {
+                        const null_reg = dst.reg;
+                        var deref_found = false;
+                        const search_end = @min(func_instrs.len, local_idx + 6);
+                        var j: usize = local_idx + 1;
+                        while (j < search_end) : (j += 1) {
+                            const next_instr = func_instrs[j];
+                            if (next_instr.kind == .call or next_instr.kind == .ret) break;
+                            if (next_instr.mem_read or next_instr.mem_write) {
+                                for (0..next_instr.op_count) |k| {
+                                    const op = next_instr.operand(k);
+                                    if ((op.kind == .reg or op.kind == .mem) and op.base == null_reg) {
+                                        deref_found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (deref_found) break;
+                        }
+                        if (deref_found) {
                             try findings.append(.{
                                 .address = instr.va,
                                 .function_va = function.start,
                                 .pattern = .null_pointer_dereference,
                                 .severity = 55,
-                                .description = "Potential null pointer assignment",
+                                .description = "Potential null pointer dereference detected",
                                 .recommendation = "Add null check after allocation",
                                 .cwe_id = 476,
                             });
@@ -210,7 +230,7 @@ pub fn analyzeMemorySafety(allocator: Allocator, _: []const u8, instrs: []const 
                     .function_va = function.start,
                     .pattern = .unbounded_copy,
                     .severity = 80,
-                    .description = try std.fmt.allocPrint(allocator, "Unbounded string copy: {s}", .{name}),
+                    .description = "Unbounded string copy detected",
                     .recommendation = "Replace with strncpy, strlcpy, or snprintf with length limit",
                     .cwe_id = 120,
                 });
@@ -223,7 +243,7 @@ pub fn analyzeMemorySafety(allocator: Allocator, _: []const u8, instrs: []const 
                     .function_va = function.start,
                     .pattern = .format_string_vulnerability,
                     .severity = 90,
-                    .description = try std.fmt.allocPrint(allocator, "Format string function: {s}", .{name}),
+                    .description = "Format string function detected",
                     .recommendation = "Use fixed format strings, never pass user input as format",
                     .cwe_id = 134,
                 });
@@ -273,6 +293,7 @@ pub fn analyzeMemorySafety(allocator: Allocator, _: []const u8, instrs: []const 
         }
 
         if (alloc_count > 0 and free_count == 0 and func_instrs.len > 3) {
+            memory_leak_count += 1;
             try findings.append(.{
                 .address = function.start,
                 .function_va = function.start,
@@ -290,7 +311,7 @@ pub fn analyzeMemorySafety(allocator: Allocator, _: []const u8, instrs: []const 
                 .function_va = function.start,
                 .pattern = .stack_buffer_overflow,
                 .severity = 65,
-                .description = try std.fmt.allocPrint(allocator, "Large stack frame ({d} bytes) without stack protector", .{frame.frame_size}),
+                .description = "Large stack frame without stack protector",
                 .recommendation = "Compile with -fstack-protector-strong or reduce stack frame size",
                 .cwe_id = 121,
             });
@@ -312,11 +333,11 @@ pub fn analyzeMemorySafety(allocator: Allocator, _: []const u8, instrs: []const 
         .stack_frames = try stack_frames.toOwnedSlice(),
         .unsafe_copy_count = unsafe_copy_count,
         .format_string_count = fmt_string_count,
-        .memory_leak_count = alloc_count -| free_count,
+        .memory_leak_count = memory_leak_count,
         .use_after_free_count = use_after_free_count,
         .buffer_overflow_count = buf_overflow_count,
         .null_deref_count = null_deref_count,
-        .total_allocation_sites = alloc_count,
+        .total_allocation_sites = 0,
         .safety_gap_score = score,
     };
 }
