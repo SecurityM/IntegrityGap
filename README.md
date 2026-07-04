@@ -46,7 +46,8 @@ cd tests && bash run_tests.sh   # ~700 shell-based tests
 │   │   ├── compliance_engine.zig      # PCI DSS, HIPAA, SOC2, ISO 27001 checks (530 lines)
 │   │   ├── memory_safety.zig          # Buffer overflow, use-after-free, format string (447 lines)
 │   │   ├── dependency_checker.zig     # CVE matching, license detection (352 lines)
-│   │   └── config_auditor.zig         # Hardcoded credentials, insecure defaults (376 lines)
+│   │   ├── config_auditor.zig         # Hardcoded credentials, insecure defaults (376 lines)
+│   │   └── string_analyzer.zig        # ASCII/Unicode string extraction and classification (514 lines)
 │   ├── output/
 │   │   ├── reporter.zig          # JSON, plain text, DOT, CSV, diff output (529 lines)
 │   │   └── report_engine.zig     # HTML, Markdown, SARIF, JUnit XML reports (1209 lines)
@@ -94,6 +95,7 @@ integritygap --version
 | `--memory` | Memory safety analysis |
 | `--dependencies` | Dependency/CVE scanning |
 | `--config` | Configuration audit |
+| `--strings` | String extraction and classification |
 
 ### Output Flags
 
@@ -305,6 +307,28 @@ Matches dependency names against 30+ embedded CVE records (OpenSSL: CVE-2014-016
 ### config_auditor.zig
 Searches binary sections for hardcoded credential patterns (password, secret, api_key, token, connection_string). Detects insecure defaults (admin, root, default, debug), disabled security, verbose errors, permissive permissions. Produces security control inventory (12 controls).
 
+### string_analyzer.zig
+Extracts and classifies human-readable strings from binary sections, supporting both ASCII (single-byte) and UTF-16LE (wide char) encodings. Classification is regex-free — uses deterministic pattern matching to categorize strings into **10 interesting types**:
+
+| Type | Examples | Detection Logic |
+|---|---|---|
+| **URL** | `https://api.example.com/auth` | Starts with `http://`, `https://`, `ftp://`, `ws://`, `wss://` |
+| **IPv4** | `192.168.1.1` | Four octets (0–255) separated by dots |
+| **IPv6** | `2001:db8::1`, `::1` | Hex groups with colons, shorthand `::`, zone IDs |
+| **Email** | `user@domain.com` | `\w+@\w+.\w+` with valid TLD (com, org, net, etc.) |
+| **Unix Path** | `/usr/local/bin`, `/dev/null` | Starts with `/`, contains valid path characters |
+| **Windows Path** | `C:\Users\admin`, `\\server\share` | Drive letter + `:\` or UNC `\\` prefix |
+| **Registry Key** | `HKLM\Software\Microsoft` | Starts with HKLM/HKCU/HKCR/HKCC/HKPD |
+| **Shell Command** | `wget`, `chmod +x`, `powershell -enc` | Matches known shell commands/operators from a 180+ entry dictionary |
+| **Crypto Key** | `-----BEGIN RSA PRIVATE KEY-----` | PEM armor boundaries, Base64-encoded key material ≥64 chars |
+| **JWT Token** | `eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0` | Three dot-separated Base64url segments matching JWT structure |
+| **Hex String** | `1A2B3C4D5E6F7890` | Even-length hex characters, validated with Shannon entropy filter |
+| **Base64** | `SGVsbG8gV29ybGQ=` | ≥28 chars, valid Base64 alphabet, proper padding |
+
+**Output:** When `--strings` mode is active, the tool prints a summary with total strings extracted, count per classification type, interesting ratio, and a detailed listing of each classified string with its offset, classification, severity (derived from type: crypto keys=90, shell commands=80, registry_keys=75, JWTs=70, URLs=65, emails=60, IPs/Base64=40, paths=20, hex=10) and a human-readable description.
+
+**Integration:** Results are also embedded in JSON, HTML, Markdown, SARIF, and CSV reports when combined with other modes (`--all`).
+
 ## Post-Processing Modules
 
 ### false_positive_reducer.zig
@@ -336,7 +360,7 @@ Parses `.conf` files: comments (# or ;), key=value (prefixed with --), default t
 ### plugin_system.zig
 Loads shared libraries (.so, .dylib, .dll) via `std.DynLib`. 8 hook points: pre/post analysis, pre/post function-profile, pre/post report, pre/post filter. Plugin manifest with name, version, author.
 
-## Differences from v1.0.0
+## Differences from v2.0.0
 
 **Preserved:**
 - 10-dimension per-function scoring methodology (6 original + 4 new: concurrency, memory_safety, configuration, supply_chain)
@@ -348,6 +372,9 @@ Loads shared libraries (.so, .dylib, .dll) via `std.DynLib`. 8 hook points: pre/
 
 **Added in v2.0.0:**
 - 9 specialized analysis engines (concurrency, taint, firmware, crypto, privacy, compliance, memory, dependencies, config)
+
+**Added in v2.1.0:**
+- String extraction and classification engine (`string_analyzer.zig`): extracts ASCII/Unicode strings, classifies into 12 types (URLs, IPs, paths, registry keys, shell commands, crypto keys, emails, JWTs, base64, hex) with deterministic pattern matching — no regex dependency
 - 6 additional output formats (HTML, Markdown, CSV, SARIF, JUnit XML, DOT)
 - 4 post-processing modules (FP reduction, CVSS, STRIDE, remediation)
 - Plugin system, config file support, batch processing, result caching
