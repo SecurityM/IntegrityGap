@@ -189,7 +189,9 @@ Each specialized analysis engine outputs its own score (0–100 or 0–100%). Th
 | compliance_engine | overall_score | 0–100% | Average pass rate across all checked frameworks |
 | compliance_engine | pci_dss/hipaa/soc2/iso_27001 score | 0–100% | Per-framework requirement pass rate (ComplianceReport.score) |
 | dependency_checker | supply_chain_score | 0–100% | CVE-free dependency ratio, signature validity |
+| dependency_checker | cve_score | 0–100 | Severity-weighted score of matched known CVEs in detected dependencies |
 | config_auditor | config_security_score | 0–100% | Security control implementation rate across 12 controls |
+| threat_model | risk_score | 0–100 | STRIDE/PASTA-derived risk score per identified threat scenario |
 
 ### Threat Classification
 
