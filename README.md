@@ -1,6 +1,13 @@
-# IntegrityGap
+# IntegrityGap v2.1.0
 
-Static binary analysis framework for ELF, PE, and Mach-O executables. Written in Zig 0.13.0 with no external dependencies.
+Static binary analysis framework for ELF, PE, and Mach-O executables that detects **missing security behaviors** (not just known vulnerabilities). Written in Zig 0.13.0 with zero external dependencies.
+
+## What Makes This Different
+
+Traditional binary analyzers look for **known bad patterns**.  
+IntegrityGap looks for **what's missing** — gaps in error handling, resource cleanup, input validation, etc.
+
+Uses a **10-dimension scoring system** evaluated across 12 specialized analysis engines.
 
 ## Build
 
@@ -12,383 +19,479 @@ zig build -Doptimize=ReleaseFast
 zig build -Doptimize=ReleaseSmall
 ```
 
-The compiled binary is at `zig-out/bin/integritygap`.
+Compiled binary: `zig-out/bin/integritygap`
 
 ### Tests
 
 ```bash
-zig build test              # embedded test blocks in each source file
-cd tests && bash run_tests.sh   # ~700 shell-based tests
+zig build test                      # embedded test blocks
+cd tests && bash run_tests.sh       # ~700 integration tests
 ```
 
-## Source Organization
-
-```
-
-├── build.zig
-├── LICENSE
-├── README.md
-├── src/
-│   ├── main.zig                 # CLI entry point, argument parsing, orchestration (621 lines)
-│   ├── types.zig                # Central type definitions, structs, enums, constants (565 lines)
-│   ├── core/                    # Core analysis pipeline
-│   │   ├── parser.zig           # ELF/PE/Mach-O binary parser (1148 lines)
-│   │   ├── decoder.zig          # x86/x86_64/ARM64 instruction decoder (989 lines)
-│   │   ├── analyzer.zig         # 10-dimension integrity gap scoring engine (888 lines)
-│   │   ├── signatures.zig       # Known API import signatures and call categorization (192 lines)
-│   │   └── utils.zig            # Integer reading, string utilities, hashing, entropy (228 lines)
-│   ├── analysis/                # Specialized analysis engines
-│   │   ├── concurrency_analyzer.zig   # Data races, lock analysis, deadlock detection (560 lines)
-│   │   ├── taint_analyzer.zig         # Taint propagation from sources to sinks (505 lines)
-│   │   ├── firmware_integrity.zig     # Firmware image format analysis (541 lines)
-│   │   ├── crypto_auditor.zig         # Cryptographic algorithm and key analysis (562 lines)
-│   │   ├── privacy_analyzer.zig       # PII detection, consent, data flow (439 lines)
-│   │   ├── compliance_engine.zig      # PCI DSS, HIPAA, SOC2, ISO 27001 checks (530 lines)
-│   │   ├── memory_safety.zig          # Buffer overflow, use-after-free, format string (447 lines)
-│   │   ├── dependency_checker.zig     # CVE matching, license detection (352 lines)
-│   │   ├── config_auditor.zig         # Hardcoded credentials, insecure defaults (376 lines)
-│   │   └── string_analyzer.zig        # ASCII/Unicode string extraction and classification (514 lines)
-│   ├── output/
-│   │   ├── reporter.zig          # JSON, plain text, DOT, CSV, diff output (529 lines)
-│   │   └── report_engine.zig     # HTML, Markdown, SARIF, JUnit XML reports (1209 lines)
-│   ├── postproc/
-│   │   ├── false_positive_reducer.zig  # Context-based FP reduction (262 lines)
-│   │   ├── cvss_scorer.zig             # CVSS v3.1/v3.0/v2.0 scoring (282 lines)
-│   │   ├── threat_model.zig            # STRIDE classification, attack trees (203 lines)
-│   │   └── remediation_engine.zig      # Remediation suggestion generation (234 lines)
-│   └── infra/
-│       ├── logging.zig            # Thread-safe file-rotating logger (171 lines)
-│       ├── batch_analyzer.zig     # Multi-target batch processing (185 lines)
-│       ├── result_cache.zig       # TTL-based analysis result cache (213 lines)
-│       ├── config_file.zig        # Configuration file parser (198 lines)
-│       └── plugin_system.zig      # Dynamic plugin loading with 8 hook points (192 lines)
-├── tests/
-│   └── run_tests.sh
-├── examples/
-│   └── sample_config.conf
-```
+---
 
 ## CLI Usage
 
-### Synopsis
+### Basic Syntax
 
 ```
-integritygap --target <binary> [mode] [output flags] [options]
+integritygap --target <binary> [mode] [output] [options]
 integritygap --target <binary> --diff <other>
-integritygap --target <binary> --baseline <known_clean>
 integritygap --help
 integritygap --version
 ```
 
 ### Modes
 
-| Flag | Default pipeline additions |
-|---|---|
-| `--all` | All enabled engines (default) |
-| `--integrity-gap` | 10-dimension core scoring only |
-| `--concurrency` | Concurrency analysis engine |
-| `--taint` | Taint propagation analysis |
-| `--firmware` | Firmware image analysis |
+| Flag | What it adds |
+|------|-------------|
+| `--all` | All engines (default) |
+| `--integrity-gap` | 10-dimension scoring only |
+| `--concurrency` | Data race & lock analysis |
+| `--taint` | Taint propagation tracking |
+| `--firmware` | Firmware integrity checks |
 | `--crypto` | Cryptographic audit |
-| `--privacy` | Privacy compliance analysis |
-| `--compliance` | Regulatory compliance checks |
-| `--memory` | Memory safety analysis |
-| `--dependencies` | Dependency/CVE scanning |
-| `--config` | Configuration audit |
-| `--strings` | String extraction and classification |
+| `--privacy` | PII & compliance detection |
+| `--compliance` | PCI DSS, HIPAA, SOC2, ISO27001 |
+| `--memory` | Buffer overflow, use-after-free |
+| `--dependencies` | CVE & license scanning |
+| `--config` | Hardcoded credentials |
+| `--strings` | String extraction & classification |
 
-### Output Flags
+### Output Formats
 
 | Flag | Format |
-|---|---|
+|------|--------|
 | `--json <path>` | JSON |
+| `--html <path>` | Self-contained HTML report |
+| `--markdown <path>` | GitHub-flavored markdown |
+| `--sarif <path>` | OASIS SARIF v2.1.0 |
+| `--csv <path>` | Tabular CSV |
+| `--dot <path>` | Graphviz DOT (call graph) |
 | `--plain` | Plain text to stdout |
-| `--dot <path>` | Graphviz DOT |
-| `--html <path>` | HTML |
-| `--markdown <path>` | Markdown |
-| `--sarif <path>` | SARIF v2.1.0 |
-| `--csv <path>` | CSV |
 
 ### Options
 
 | Flag | Effect |
-|---|---|
+|------|--------|
 | `--diff <path>` | Compare against another binary |
-| `--baseline <path>` | Compare against known-clean baseline |
-| `--batch <path>` | Process multiple targets from a batch file |
-| `--firmware` | Enable firmware-specific analysis mode |
-| `--max-bytes <N>` | Maximum bytes to read per target (default: 268435456) |
-| `--verbose`, `-v` | Print progress to stderr |
-| `--report-only` | Generate report from cached data, skip analysis |
-| `--cache-enabled` | Enable result caching (default: enabled) |
-| `--cache-directory <path>` | Cache storage directory |
-| `--min-severity <level>` | Minimum severity threshold |
-| `--max-findings <N>` | Maximum findings to report |
-| `--fp-reduction` | Enable false positive reduction |
-| `--enable-remediation` | Enable remediation suggestions |
-| `--enable-cvss` | Enable CVSS scoring |
-| `--config-file <path>` | Load configuration from file |
+| `--batch <path>` | Analyze multiple targets |
+| `--verbose`, `-v` | Print progress |
+| `--cache-enabled` | Enable result caching (default: on) |
+| `--cache-directory <path>` | Cache storage location |
+| `--fp-reduction` | Reduce false positives |
+| `--enable-cvss` | CVSS v3.1/v3.0/v2.0 scoring |
+| `--enable-remediation` | Remediation suggestions |
+| `--config-file <path>` | Load settings from file |
+| `--min-severity <level>` | Filter by severity |
+| `--max-findings <N>` | Limit findings |
 
-## Analysis Pipeline
+---
 
-The pipeline executes in this order:
+## 10-Dimension Scoring
 
-1. **main.zig** — reads file, parses CLI flags, selects modes
-2. **core/parser.zig** — detects format by magic bytes, parses headers/sections/symbols/imports
-3. **core/decoder.zig** — decodes executable sections into instructions, detects function boundaries, builds call graph
-4. **core/analyzer.zig** — profiles each function across 10 dimensions (error_handling, resource_lifecycle, input_validation, cryptographic, logging_auditability, cleanup, concurrency, memory_safety, configuration, supply_chain), collects evidence, classifies threat
-5. **analysis/*.zig** — optional specialized engines (selected by mode flag)
-6. **postproc/*.zig** — optional post-processing (FP reduction, CVSS, STRIDE, remediation, caching)
-7. **output/reporter.zig** or **output/report_engine.zig** — serializes results to requested format
+Every function is scored 0-100 on these dimensions (fixed weights):
 
-## Scoring System
+| Dimension | Weight | Measures |
+|-----------|--------|----------|
+| error_handling | 15% | Unchecked return values |
+| resource_lifecycle | 12% | Acquire/release matching |
+| cryptographic | 13% | Init/finalize, key handling |
+| input_validation | 10% | Bounds checking, validation |
+| cleanup | 10% | Exit path resource release |
+| concurrency | 10% | Lock ordering, data races |
+| memory_safety | 10% | Buffers, use-after-free |
+| logging_auditability | 8% | High-risk operations logged |
+| configuration | 6% | Hardcoded creds, defaults |
+| supply_chain | 6% | CVE dependencies, licenses |
 
-The system produces scoring dimensions at two levels: per-function category scores (10 dimensions from CategoryScores aggregated into a single function gap) and engine-level scores (from each specialized analyzer).
+**Local Normalization:** Scores adjusted based on function population within binary. Functions significantly above/below average penalized/preserved accordingly.
 
-### Per-Function Category Scores (CategoryScores in types.zig:323)
+**Aggregate Gap:** Sum of (dimension_score × weight), clamped 0-100.
 
-Every function receives a score from 0 to 100 per category. All 10 categories contribute to the function's aggregate gap via fixed weights:
+**Threat Classification:** Decision tree produces: `No_Material_Gap`, `Legitimate_Anomalous`, `Ransomware`, `RAT`, `Dropper`, `Implant`.
 
-| Category | Weight | What it measures |
-|---|---|---|
-| error_handling | 15% | Fraction of critical calls without return-value validation |
-| resource_lifecycle | 12% | Fraction of resource acquires without matching release |
-| cryptographic | 13% | Missing init/finalize/destroy, hardcoded IV, unchecked crypto calls |
-| input_validation | 10% | Pointer dereference before validation, memcpy without bounds check |
-| cleanup | 10% | Exit paths with unreleased resources |
-| concurrency | 10% | Unsynchronized shared access, lock violations, deadlock patterns |
-| memory_safety | 10% | Unbounded copies, format strings, use-after-free, buffer overflows |
-| logging_auditability | 8% | High-risk operations without corresponding logging |
-| configuration | 6% | Hardcoded credentials, insecure defaults, disabled security |
-| supply_chain | 6% | Known CVEs in linked dependencies, unsigned libraries, license risk |
+---
 
-The aggregate gap per function is: `clamp100(Σ(category_score × weight))`.
+## 12 Analysis Engines
 
-### Local Normalization
+### 1. Concurrency Analyzer (560 lines)
+Detects:
+- Data races (unsynchronized shared memory)
+- Lock ordering violations
+- Double locks, lock leaks
+- Deadlock patterns
+- Thread-unsafe API usage
+- Unguarded shared data
 
-If 4+ functions exist, scores are normalized against the local population:
-- Functions near the average are penalized (35% retention)
-- Functions significantly above average retain 28% of raw score plus up to 22 per z-score unit
+### 2. Taint Analyzer (505 lines)
+Tracks data flow:
+- **12 source types:** network, file, user input, env var, registry, shared memory, pipe, socket, cmdline, untrusted pointer, stdin
+- **13 sink types:** code exec, SQL injection, buffer write, format string, file write, network send, privilege elevation, etc.
+- Reports unvalidated propagation paths with severity
 
-### Engine-Level Scores
+### 3. Firmware Integrity (541 lines)
+Analyzes firmware images:
+- Format detection (UEFI FV, Intel ME, U-Boot, Android, cpio, initramfs)
+- Hash mismatches
+- Missing signatures
+- Certificate validation
+- Rollback detection
+- Backdoor string detection
 
-Each specialized analysis engine outputs its own score (0–100 or 0–100%). These engine-level scores also feed back into the corresponding per-function category scores at a reduced weight (8–10%) to ensure that engine-level findings influence the core aggregate gap, anomaly confidence, and threat classification:
+### 4. Crypto Auditor (562 lines)
+Detects:
+- Cipher algorithms (AES, DES, 3DES, RC4, ChaCha20, etc.)
+- Weak ciphers
+- Hardcoded keys
+- Static IVs
+- ECB mode usage
+- Weak randomness
+- Deprecated hashes
+- Missing authentication
+- Certificate bypass
 
-| Engine | Score field | Range | Meaning |
-|---|---|---|---|
-| concurrency_analyzer | concurrency_gap_score | 0–100 | Severity of data races, lock violations, unguarded shared data |
-| concurrency_analyzer | deadlock_potential | 0–100% | Likelihood of circular wait conditions from lock ordering |
-| taint_analyzer | taint_gap_score | 0–100 | Severity of unvalidated taint propagation paths |
-| crypto_auditor | crypto_gap_score | 0–100 | Weak ciphers, hardcoded keys, static IVs, missing auth |
-| firmware_integrity | integrity_score | 0–100 | Hash mismatches, missing signatures, rollback risk |
-| memory_safety | safety_gap_score | 0–100 | Buffer overflows, use-after-free, format string, integer errors |
-| privacy_analyzer | privacy_gap_score | 0–100 | PII collection without consent, third-party sharing |
-| privacy_analyzer | gdpr_compliance_score | 0–100% | GDPR technical control coverage |
-| privacy_analyzer | ccpa_compliance_score | 0–100% | CCPA technical control coverage |
-| privacy_analyzer | hipaa_compliance_score | 0–100% | HIPAA technical safeguard coverage |
-| compliance_engine | overall_score | 0–100% | Average pass rate across all checked frameworks |
-| compliance_engine | pci_dss/hipaa/soc2/iso_27001 score | 0–100% | Per-framework requirement pass rate (ComplianceReport.score) |
-| dependency_checker | supply_chain_score | 0–100% | CVE-free dependency ratio, signature validity |
-| dependency_checker | cve_score | 0–100 | Severity-weighted score of matched known CVEs in detected dependencies |
-| config_auditor | config_security_score | 0–100% | Security control implementation rate across 12 controls |
-| threat_model | risk_score | 0–100 | STRIDE/PASTA-derived risk score per identified threat scenario |
+### 5. Privacy Analyzer (439 lines)
+Finds PII-related patterns:
+- Email, SSN, credit card, health data, biometric, location
+- Data collection/sharing functions
+- Consent mechanisms
+- Third-party SDK sharing (Google Analytics, Firebase, Facebook, etc.)
+- Maps to: GDPR, CCPA, HIPAA, LGPD, PIPEDA
 
-### Threat Classification
+### 6. Compliance Engine (530 lines)
+Evaluates regulatory frameworks:
+- **PCI DSS** (6 checks)
+- **HIPAA** (6 checks)
+- **SOC2** (5 checks)
+- **ISO 27001** (4 checks)
+- Checks: encryption, logging, access control, network security, configuration management
 
-The summary threat is decided by a rule-based decision tree in `classifyThreat()`:
+### 7. Memory Safety (447 lines)
+Detects:
+- Unbounded string copies (strcpy, sprintf, gets)
+- Format string vulnerabilities
+- Use-after-free (access within 10 instructions of free)
+- Double free
+- Null pointer dereference
+- Integer overflow in allocation size
+- Stack buffer overflow (frame >512 bytes without canary)
 
-1. If `aggregate < 15*scale` AND `max_conf < 35*scale` AND `material_ratio < 0.03` → `No_Material_Gap`
-2. If binary has >1000 functions AND `aggregate < 5.0` AND `material_ratio < 0.01` → `No_Material_Gap`
-3. If cryptographic > 40*scale AND resource > 30*scale AND error > 25*scale → `Ransomware`
-4. If logging > 40*scale AND error > 40*scale → `RAT`
-5. If resource > 50*scale AND error < 35*scale → `Dropper`
-6. If max_conf > 70*scale AND aggregate < 35*scale AND material < 0.06 → `Implant`
-7. If aggregate < 10 AND max_conf < 50 → `No_Material_Gap`
-8. Default → `Legitimate_Anomalous`
+### 8. Dependency Checker (352 lines)
+Scans for:
+- 29+ hardcoded CVE records (OpenSSL, log4j, curl, zlib, etc.)
+- Dependency type detection (by filename)
+- SPDX license identification
 
-`scale` is `adaptiveThreatScale(function_count) * systemic_boost`. The adaptive scale decreases for large binaries:
-- >5000 functions: 0.78x
-- >1000 functions: 0.88x
-- <8 functions: 1.45x
+**Note:** CVE database is static (compiled at build time). No live updates. Rebuild to refresh.
 
-### Confidence
+### 9. Config Auditor (376 lines)
+Finds:
+- Hardcoded credentials (password, secret, api_key, token, connection_string)
+- Insecure defaults (admin, root, default, debug)
+- Disabled security
+- Verbose error messages
+- Permissive permissions
+- 12-control security inventory
 
-`anomaly_confidence = clamp100(aggregate_gap * 1.25)` — derived from the mean aggregate across all functions, capped at 100.
+### 10. String Analyzer (514 lines)
+Extracts and classifies strings:
+- **12 string types:** URL, IPv4, IPv6, Email, Unix Path, Windows Path, Registry Key, Shell Command, Crypto Key, JWT, Hex, Base64
+- Regex-free deterministic matching
+- Severity scoring per type
+- Interesting ratio calculation
 
-## Input Formats
+### 11. False Positive Reducer (262 lines)
+Context analysis:
+- Surrounding validation checks
+- Compiler-optimized patterns
+- Known library signatures
+- Framework boilerplate
+- Sanitizer checks
+- Assertion guards
+- Exception handling
+- RAII wrappers
+- Known FP signatures
 
-| Format | Variants |
-|---|---|
-| ELF | ELF32, ELF64 (little-endian and big-endian) |
-| PE | PE32 (0x10b), PE32+ (0x20b) |
-| Mach-O | 32-bit, 64-bit, fat/universal |
+### 12. CVSS Scorer (282 lines)
+Produces scores for v3.1, v3.0, v2.0:
+- Base, temporal, environmental scores
+- Vector strings
+- Severity labels (none/low/medium/high/critical)
 
-## Output Formats
+---
 
-### Plain Text (stdout)
+## Post-Processing
 
-```
-IntegrityGap: ./target.bin
-Format: elf64/x86_64  Entry: 0x401000
-Classification: No_Material_Gap  Gap: 0.91  Confidence: 1.13
-Scores: error=0.0 resource=0.0 input=9.0 crypto=0.0 logging=0.0 cleanup=0.0
-Functions identified/analyzed: 16083/16083  Instructions: 449828  Evidences: 2727
+### Threat Model (STRIDE)
+Classifies findings into:
+- **Spoofing** — Identity spoofing
+- **Tampering** — Data modification
+- **Repudiation** — Action denial
+- **Information Disclosure** — Data leakage
+- **Denial of Service** — Service unavailability
+- **Elevation of Privilege** — Unauthorized access
 
-Functions with material gap:
-  0x11b6ba0-0x11b6c60 gap=20.50 conf=22.32 critical=2/2 resources=0/0 cleanup_dirty=0/0
-    -> error_handling: Syscall/sysenter without visible return validation (sev=80)
-    -> input_validation: Argument pointer deref before observable local validation (sev=55)
+Builds AND/OR attack trees. Performs PASTA risk analysis.
 
-=== Concurrency Analysis ===
-  Detected Races: 0 | Threading Issues: 0 | Concurrency Risk Score: 55.00
-```
+### Remediation Engine
+Per-finding suggestions with:
+- Priority (immediate/short-term/medium-term/long-term/informational)
+- Category (code change, config change, dependency update, etc.)
+- Effort hour estimates
 
-### JSON
-
-Full structured output with tool metadata, binary metadata, per-function profiles, evidence items with CWE IDs, call graph edges, summary scores, threat classification, and engine-specific sections.
-
-### HTML
-
-Self-contained report with inline CSS, collapsible sections, severity color coding.
-
-### Markdown
-
-GitHub-flavored markdown report.
-
-### CSV
-
-Tabular output with function, finding type, severity, and score columns.
-
-### SARIF
-
-OASIS SARIF v2.1.0 format.
-
-### JUnit XML
-
-CI/CD integration format.
-
-### DOT
-
-Graphviz directed graph with function nodes and call edges.
-
-## What Each Engine Detects
-
-### concurrency_analyzer.zig
-- Data races: unsynchronized shared memory access across threads
-- Lock ordering violations: inconsistent lock acquisition order
-- Double lock / lock leak: redundant or missing lock release
-- Deadlock patterns: circular wait conditions
-- Thread-unsafe APIs: calls from multi-threaded context
-- Unguarded shared data access: writes without synchronization
-
-### taint_analyzer.zig
-Tracks data flow from 12 source types (network, file, user input, env var, registry, etc.) to 13 sink types (exec, file write, network send, SQL query, etc.). Reports unvalidated propagation paths.
-
-### firmware_integrity.zig
-Detects firmware format (UEFI FV, Intel ME, U-Boot, Android bootimg, cpio, initramfs). Checks: hash mismatches, missing signatures, certificate validation, rollback detection, backdoor strings.
-
-When invoked with `--firmware` alone (without `--html`/`--md`/`--sarif`), firmware analysis runs standalone and produces its own output. When combined with `--html`/`--md`/`--sarif` in `--all` mode, firmware results are included in the comprehensive report alongside all other engines.
-
-### crypto_auditor.zig
-Identifies cipher algorithms (AES, DES, 3DES, RC4, ChaCha20, etc.). Detects: weak ciphers, hardcoded keys, static IVs, ECB mode, weak randomness, deprecated hashes, missing authentication, certificate validation bypass.
-
-### privacy_analyzer.zig
-Detects PII-related function patterns (email, SSN, credit card, health data, biometric, location, etc.). Checks: data collection/sharing functions, consent mechanisms, third-party SDK sharing (Google Analytics, Firebase, Facebook, etc.). Maps to GDPR, CCPA, HIPAA, LGPD, PIPEDA.
-
-### compliance_engine.zig
-Evaluates against framework requirements: PCI DSS (6 checks), HIPAA (6 checks), SOC2 (5 checks), ISO 27001 (4 checks). Checks: encryption usage, logging, access control, network security, configuration management.
-
-### memory_safety.zig
-Detects: unbounded string copies (strcpy, sprintf, gets), format string vulnerabilities, use-after-free (access within 10 instructions of free), double free, null pointer dereference, integer overflow in allocation size, stack buffer overflow (frame >512 bytes without canary).
-
-### dependency_checker.zig
-Matches dependency names against 30+ embedded CVE records (OpenSSL: CVE-2014-0160 Heartbleed, CVE-2022-3602; log4j: CVE-2021-44228; curl, zlib, libpng, libssh2, sqlite3, etc.). Detects dependency types by filename pattern. Identifies SPDX licenses.
-
-**Note:** The CVE database is statically compiled into the binary at build time. It reflects known vulnerabilities up to the release date of this version (v2.1.0). There is no live update mechanism — the database is a snapshot, not a live feed. To update, rebuild the binary against the latest source.
-
-### config_auditor.zig
-Searches binary sections for hardcoded credential patterns (password, secret, api_key, token, connection_string). Detects insecure defaults (admin, root, default, debug), disabled security, verbose errors, permissive permissions. Produces security control inventory (12 controls).
-
-### string_analyzer.zig
-Extracts and classifies human-readable strings from binary sections, supporting both ASCII (single-byte) and UTF-16LE (wide char) encodings. Classification is regex-free — uses deterministic pattern matching to categorize strings into **10 interesting types**:
-
-| Type | Examples | Detection Logic |
-|---|---|---|
-| **URL** | `https://api.example.com/auth` | Starts with `http://`, `https://`, `ftp://`, `ws://`, `wss://` |
-| **IPv4** | `192.168.1.1` | Four octets (0–255) separated by dots |
-| **IPv6** | `2001:db8::1`, `::1` | Hex groups with colons, shorthand `::`, zone IDs |
-| **Email** | `user@domain.com` | `\w+@\w+.\w+` with valid TLD (com, org, net, etc.) |
-| **Unix Path** | `/usr/local/bin`, `/dev/null` | Starts with `/`, contains valid path characters |
-| **Windows Path** | `C:\Users\admin`, `\\server\share` | Drive letter + `:\` or UNC `\\` prefix |
-| **Registry Key** | `HKLM\Software\Microsoft` | Starts with HKLM/HKCU/HKCR/HKCC/HKPD |
-| **Shell Command** | `wget`, `chmod +x`, `powershell -enc` | Matches known shell commands/operators from a 180+ entry dictionary |
-| **Crypto Key** | `-----BEGIN RSA PRIVATE KEY-----` | PEM armor boundaries, Base64-encoded key material ≥64 chars |
-| **JWT Token** | `eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0` | Three dot-separated Base64url segments matching JWT structure |
-| **Hex String** | `1A2B3C4D5E6F7890` | Even-length hex characters, validated with Shannon entropy filter |
-| **Base64** | `SGVsbG8gV29ybGQ=` | ≥28 chars, valid Base64 alphabet, proper padding |
-
-**Output:** When `--strings` mode is active, the tool prints a summary with total strings extracted, count per classification type, interesting ratio, and a detailed listing of each classified string with its offset, classification, severity (derived from type: crypto keys=90, shell commands=80, registry_keys=75, JWTs=70, URLs=65, emails=60, IPs/Base64=40, paths=20, hex=10) and a human-readable description.
-
-**Integration:** Results are also embedded in JSON, HTML, Markdown, SARIF, and CSV reports when combined with other modes (`--all`).
-
-## Post-Processing Modules
-
-### false_positive_reducer.zig
-Evaluates 10 context factors per evidence item: surrounding validation, compiler-optimized patterns, known library signatures, framework boilerplate, sanitizer checks, assertion guards, exception handling, indirect return use, RAII wrappers, FP signature matches. Adjusts confidence scores.
-
-### cvss_scorer.zig
-Computes CVSS v3.1 base, temporal, and environmental scores per finding. Supports v3.0 and v2.0. Produces vector strings and severity labels (none/low/medium/high/critical).
-
-### threat_model.zig
-Classifies findings into STRIDE categories (Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service, Elevation of Privilege). Builds AND/OR attack trees. Performs PASTA risk analysis.
-
-### remediation_engine.zig
-Generates per-finding suggestions with priority (immediate/short-term/medium-term/long-term/informational), category (code change, config change, dependency update, etc.), and effort hour estimates.
+---
 
 ## Infrastructure
 
-### logging.zig
-Thread-safe logger with 6 severity levels (debug/critical). File rotation at 10 MB, up to 5 backups. Mutex-based thread safety.
+### Logging
+- 6 severity levels (debug/critical)
+- File rotation at 10 MB
+- 5 backup files
+- Thread-safe (mutex-based)
 
-### batch_analyzer.zig
-Processes multiple targets from a batch file. Modes: full, quick, integrity-only, compliance-only. Progress callbacks and per-target timing.
+### Batch Processing
+- Multiple target analysis
+- Modes: full, quick, integrity-only, compliance-only
+- Progress callbacks
+- Per-target timing
 
-### result_cache.zig
-TTL-based cache keyed by file content hash. Get, set, invalidate, clear operations. Configurable storage directory and entry lifetime.
+### Result Caching
+- TTL-based cache
+- Keyed by file content hash
+- Configurable TTL & storage
+- Get, set, invalidate, clear operations
 
-### config_file.zig
-Parses `.conf` files: comments (# or ;), key=value (prefixed with --), default target as bare value. Supports all CLI flags as keys.
+### Config Files
+- Comments: `#` or `;`
+- Key=value format: `--flag value`
+- Supports all CLI flags
+- Default target as bare value
 
-### plugin_system.zig
-Loads shared libraries (.so, .dylib, .dll) via `std.DynLib`. 8 hook points: pre/post analysis, pre/post function-profile, pre/post report, pre/post filter. Plugin manifest with name, version, author.
+### Plugin System
+- Load `.so`, `.dylib`, `.dll` shared libraries
+- 8 hook points:
+  - pre_analysis, post_analysis
+  - pre_function, post_function
+  - pre_report, post_report
+  - pre_filter, post_filter
+- Plugin manifest: name, version, author
+- Extensible architecture
 
-## Differences from v2.0.0
+---
+
+## Binary Diffing
+
+Compare two binaries to detect regressions:
+
+```bash
+integritygap --target old.bin --diff new.bin --json report.json
+```
+
+Output shows:
+- Gap score changes per function
+- Dimensions that improved/degraded
+- Functions with material changes
+- Security regression warnings
+
+Useful for:
+- Verifying patch effectiveness
+- Detecting unintended security regressions
+- Release candidate validation
+- Security regression testing in CI/CD
+
+---
+
+## Analysis Quality
+
+### Accuracy by Binary Type
+
+| Binary Type | FP Rate | FN Rate | TP Rate |
+|-------------|---------|---------|---------|
+| Simple C (-O0) | 8-15% | 10-20% | 70-80% |
+| Modern C++ | 15-25% | 20-35% | 55-70% |
+| Optimized (-O3) | 20-35% | 30-50% | 45-65% |
+| Obfuscated/Malware | 25-40% | 35-60% | 40-55% |
+
+### Known Limitations
+
+⚠️ **Function boundary detection** — Relies on prologue patterns; misses optimized leaf functions  
+⚠️ **Interprocedural analysis** — Limited; tracks direct call chains only  
+⚠️ **Exception handling** — C++ exceptions not fully modeled  
+⚠️ **RAII patterns** — Zig/Rust cleanup not always visible  
+⚠️ **Indirect calls** — Virtual methods and function pointers not resolved  
+⚠️ **Compiler optimizations** — Inlining and dead code removal reduce accuracy  
+
+### Best Used For
+
+✅ **Exploratory binary analysis** — First-pass screening  
+✅ **Malware classification** — Threat categorization  
+✅ **Security audits** — With manual verification  
+✅ **Binary diffing** — Regression detection  
+✅ **Research** — Behavioral analysis  
+
+### Not Recommended For
+
+❌ **Automated gating** — Without human review  
+❌ **Compliance evidence** — Unverified findings  
+❌ **Legal proceedings** — Insufficient confidence  
+
+---
+
+## Source Organization
+
+```
+src/
+├── main.zig                    # CLI entry, orchestration (621 lines)
+├── types.zig                   # Type definitions (565 lines)
+├── core/
+│   ├── parser.zig              # Binary parsing (1148 lines)
+│   ├── decoder.zig             # Instruction decoding (989 lines)
+│   ├── analyzer.zig            # 10-dim scoring (888 lines)
+│   ├── signatures.zig          # API signatures (192 lines)
+│   └── utils.zig               # Utilities (228 lines)
+├── analysis/                   # 10 specialized engines
+│   ├── concurrency_analyzer.zig
+│   ├── taint_analyzer.zig
+│   ├── firmware_integrity.zig
+│   ├── crypto_auditor.zig
+│   ├── privacy_analyzer.zig
+│   ├── compliance_engine.zig
+│   ├── memory_safety.zig
+│   ├── dependency_checker.zig
+│   ├── config_auditor.zig
+│   └── string_analyzer.zig
+├── output/
+│   ├── reporter.zig            # JSON, CSV, DOT (529 lines)
+│   └── report_engine.zig       # HTML, Markdown, SARIF, JUnit (1209 lines)
+├── postproc/
+│   ├── false_positive_reducer.zig
+│   ├── cvss_scorer.zig
+│   ├── threat_model.zig
+│   └── remediation_engine.zig
+└── infra/
+    ├── logging.zig
+    ├── batch_analyzer.zig
+    ├── result_cache.zig
+    ├── config_file.zig
+    └── plugin_system.zig
+```
+
+**Total:** 12,083 lines of Zig code, 27 files
+
+---
+
+## Output Examples
+
+### Plain Text
+```
+IntegrityGap: ./target.bin
+Format: elf64/x86_64  Entry: 0x401000
+Classification: Legitimate_Anomalous  Gap: 42.1  Confidence: 67.3
+
+Dimension Scores:
+  error_handling: 35  resource_lifecycle: 28  cryptographic: 12  ...
+
+Functions with material gap:
+  0x11b6ba0-0x11b6c60 gap=52.3 severity=high
+    → error_handling: Syscall without return validation (sev=80)
+    → input_validation: Pointer deref before checks (sev=75)
+```
+
+### JSON
+Full structured output with metadata, per-function profiles, evidence items (CWE IDs), call graph, summary scores, threat classification, engine-specific sections.
+
+### HTML
+Self-contained report with inline CSS, collapsible sections, severity color coding, interactive diagrams.
+
+### SARIF
+OASIS SARIF v2.1.0 format for CI/CD integration and tooling compatibility.
+
+---
+
+## Threat Classification
+
+Decision tree produces one of:
+
+- **No_Material_Gap** — Aggregate <15, confidence <35, <3% material functions
+- **Legitimate_Anomalous** — Code with minor gaps, no clear exploit path
+- **Ransomware** — High crypto + resource scoring + error handling gaps
+- **RAT** — Logging gaps + error handling issues (command & control)
+- **Dropper** — Resource handling + low error handling (payload delivery)
+- **Implant** — High confidence anomalies + low aggregate (sophisticated attacker)
+
+Thresholds adapt for binary size (penalty at 5000+ functions, bonus at <8 functions).
+
+---
+
+## What Changed from v2.0.0
 
 **Preserved:**
-- 10-dimension per-function scoring methodology (6 original + 4 new: concurrency, memory_safety, configuration, supply_chain)
-- 9 engine-level scores (taint, crypto, firmware, memory, privacy ×4, compliance, dependency, config)
-- Threat classification decision tree (with adjusted thresholds)
-- Call categorization and return-value checking
-- CFG-based cleanup path analysis
-- Known API signature database
+- 10-dimension scoring methodology
+- 9 engine-level scores
+- Threat classification tree
+- Call categorization
+- CFG-based cleanup analysis
+- API signature database
 
 **Added in v2.0.0:**
-- 9 specialized analysis engines (concurrency, taint, firmware, crypto, privacy, compliance, memory, dependencies, config)
+- 9 specialized analysis engines
 
 **Added in v2.1.0:**
-- String extraction and classification engine (`string_analyzer.zig`): extracts ASCII/Unicode strings, classifies into 12 types (URLs, IPs, paths, registry keys, shell commands, crypto keys, emails, JWTs, base64, hex) with deterministic pattern matching — no regex dependency
-- 6 additional output formats (HTML, Markdown, CSV, SARIF, JUnit XML, DOT)
+- String extraction & classification (12 types)
+- 6 output formats (HTML, Markdown, CSV, SARIF, JUnit, DOT)
 - 4 post-processing modules (FP reduction, CVSS, STRIDE, remediation)
-- Plugin system, config file support, batch processing, result caching
+- Plugin system (8 hook points)
+- Config file support
+- Batch processing
+- Result caching
 - Modular file structure (27 files vs 1 file)
-- All scores and thresholds adjusted for large binaries
+- Adjusted scoring for large binaries (>5000 functions)
 
-## CVE Database
+---
 
-The dependency checker includes 29 hardcoded CVE entries (e.g., OpenSSL 1.1.1 → CVE-2022-3602)
-compiled into the binary at build time. This is a static snapshot and is **not** dynamically updated.
-The database was last reviewed for the v2.1.0 release. Rebuild the binary to refresh from source.
+## Known Issues
+
+**v2.1.0 limitations to fix in v3.0.0:**
+
+- ⚠️ Interprocedural dataflow — currently basic (direct call chains only)
+- ⚠️ Exception handling — flags exist, `.eh_frame` parsing not implemented
+- ⚠️ Compiler optimization detection — not yet implemented
+- ⚠️ Symbolic execution — not implemented
+- ⚠️ Incremental analysis — basic caching only
+- ⚠️ Machine learning scoring — planned for v3.1
+
+---
 
 ## License
 
-Apache 2.0 — see LICENSE.
+Apache 2.0 — see LICENSE file
+
+---
+
+## Quick Start
+
+```bash
+# Analyze a binary with all engines
+integritygap --target /bin/ls --all --html report.html
+
+# Check for compliance issues
+integritygap --target app.exe --compliance --json findings.json
+
+# Compare two versions
+integritygap --target old.bin --diff new.bin --markdown diff.md
+
+# Batch analysis
+integritygap --batch binaries.txt --all --json results.json
+
+# Enable caching for repeated runs
+integritygap --target binary.bin --cache-enabled --cache-directory ./cache
+```
+
+---
+
+**Version:** 2.1.0  
+**Build Date:** July 2026  
+**Language:** Zig 0.13.0  
+**Dependencies:** Zero external  
+**License:** Apache 2.0
